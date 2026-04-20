@@ -14,16 +14,17 @@ p=[]
 ir=(ti==r.public_ip or ti==r.local_ip)
 if ir then
 p=r.used_ports
-print("Target is the router — listing "+p.len+" forwarded ports")
 else
 p=r.device_ports(ti)
 if p==null then exit("Could not get ports for "+ti+" (is it connected?)")
+end if
+if p.len>0 then
+if ir then
+print("Target is the router — listing "+p.len+" forwarded ports")
+else
 print("Target is LAN machine — found "+p.len+" open ports")
 end if
 print("")
-if p.len==0 then
-print("No ports found.")
-else
 print("PORT     SERVICE INFO")
 print("-"*50)
 for po in p
@@ -37,6 +38,8 @@ ps=ps+" "
 end while
 print(ps+i)
 end for
+else
+print("No ports found.")
 end if
 print("")
 print("[*] Recon complete.")

@@ -1,5 +1,5 @@
 // WiFi Cracker — uses crypto.so: airmon + aireplay + aircrack
-// Usage: wifi_crack.gs [targetBssid]
+// Usage: wifi_crack.gs [targetBssid] [targetEssid]
 
 crypto = include_lib("/lib/crypto.so")
 if not crypto then exit("crypto.so not found in /lib/")
