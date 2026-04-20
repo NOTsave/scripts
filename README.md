@@ -115,7 +115,26 @@ All scripts implement:
 
 ## Size Limits
 
-Grey Hack compiled binaries are capped at **80,000 characters**. The mini versions in this repo are designed to fit comfortably within this limit while maximizing functionality.
+| Limit | Value | Context |
+|-------|-------|---------|
+| **Source files** | 160,000 characters | Code Editor in-game |
+| **Compiled binaries** | 80,000 characters | After `build` command |
+
+The mini versions are optimized with minification + obfuscation to fit comfortably within these limits.
+
+## Greybel Extension Setup
+
+This repository is configured for use with the **Greybel** VS Code extension:
+
+1. Install the Greybel extension in Windsurf/VS Code
+2. Configure settings (`Ctrl+,` → search "Greybel"):
+   - **Transpiler › Minify**: Enable
+   - **Transpiler › Obfuscation**: Enable  
+   - **Transpiler › Uglify**: Enable
+   - **Language › Version**: "Latest"
+3. Use `Ctrl+Shift+B` to build/minify scripts before copying to game
+
+See `.windsurf/GREYBEL_CONFIG.md` for complete configuration details.
 
 ## License
 

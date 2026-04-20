@@ -1,0 +1,6 @@
+{
+    "greybel.transpiler.minify": true,
+    "greybel.transpiler.obfuscation": true,
+    "greybel.transpiler.uglify": true,
+    "greybel.language.version": "latest"
+}
