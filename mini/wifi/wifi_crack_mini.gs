@@ -25,11 +25,10 @@ r=cr.aireplay(tb,te,5)
 if typeof(r)=="string" then exit("aireplay failed: "+r)
 print("[+] Handshake captured")
 print("[*] Starting aircrack...")
-wp=user_input("Wordlist path (default: /home/player/wordlist.txt): ")
-if wp=="" then wp="/home/player/wordlist.txt"
-wf=c.File(wp)
-if wf==null then exit("Wordlist not found: "+wp)
-p=cr.aircrack(tb,wp)
+cp=user_input("Capture file path: ")
+cf=c.File(cp)
+if cf==null then exit("Capture file not found: "+cp)
+p=cr.aircrack(cp)
 if p==null then
 print("[-] Password not found in wordlist")
 else

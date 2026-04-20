@@ -14,3 +14,6 @@ creds.txt
 # Compiled/built outputs if you export anything
 *.bin
 *.out
+
+# API documentation references (local only)
+api_refs.txt
