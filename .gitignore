@@ -1,0 +1,16 @@
+# Windsurf AI internals
+.windsurf/
+.windsurfrules
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Any notes with real game credentials or IPs
+secrets.txt
+targets.txt
+creds.txt
+
+# Compiled/built outputs if you export anything
+*.bin
+*.out
