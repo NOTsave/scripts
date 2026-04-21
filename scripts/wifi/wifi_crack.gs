@@ -43,7 +43,7 @@ if captureFile == null then exit("Capture file not found: " + capturePath)
 // Step 3: Crack with aircrack
 print("[*] Starting aircrack...")
 password = crypto.aircrack(capturePath)
-if not password then
+if password == null then
     print("[-] Password not found in wordlist")
 else
     print("[+] PASSWORD CRACKED: " + password)

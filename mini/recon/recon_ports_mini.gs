@@ -14,6 +14,7 @@ p=[]
 ir=(ti==r.public_ip or ti==r.local_ip)
 if ir then
 p=r.used_ports
+if p==null then p=[]
 else
 p=r.device_ports(ti)
 if p==null then exit("Could not get ports for "+ti+" (is it connected?)")

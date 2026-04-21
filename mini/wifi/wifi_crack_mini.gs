@@ -12,7 +12,7 @@ if params.len>=2 then
 else
     te=user_input("Target ESSID (network name): ")
 end if
-if tb=="" then exit("No BSSID provided")
+if tb=="" or te=="" then exit("BSSID and ESSID required")
 c=get_shell.host_computer
 iface=c.network_devices.split(" ")[0]
 print("[*] Enabling monitor mode with airmon...")
