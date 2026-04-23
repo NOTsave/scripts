@@ -1,0 +1,496 @@
+// kyber_lib.gs - Complete Kyber implementation for botnet (no ternary, no backslashes)
+
+modulo = function(num, mod)
+    return num - mod * floor(num / mod)
+end function
+
+list.min = function()
+    cpy = self
+    cpy.sort(null, 0)
+    return cpy.pop()
+end function
+
+Kyber = {}
+Kyber.Q = 3329
+Kyber.N = 256
+Kyber.K = 2
+Kyber.L = 2
+Kyber.ETA_1 = 5
+Kyber.New = function()
+    return new Kyber
+end function
+
+// 128 bit seed
+Kyber.RAND = [floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16)]
+Kyber.rand_seed_secure = function
+    out = [0,0,0,0,0,0,0,0]
+    for i in range(Kyber.RAND.len - 1)
+        Kyber.RAND[i] = floor(rnd(Kyber.RAND[i]) * 2^16)
+        out[i] = floor(rnd * 2^16)
+    end for
+    return out
+end function
+
+Kyber.RAND_DET = [0,0,0,0,0,0,0,0]
+Kyber.set_rand_seeds = function(seeds)
+    Kyber.RAND_DET = [] + seeds
+end function
+Kyber.rand_det = function(lim=Kyber.Q)
+    out = [0,0,0,0,0,0,0,0]
+    for i in range(Kyber.RAND_DET.len - 1)
+        Kyber.RAND_DET[i] = floor(rnd(Kyber.RAND_DET[i]) * 2^16)
+        out[i] = floor(rnd * 2^16)
+    end for
+    return modulo(bitwise("|", bitwise("^", out[0], out[1]), bitwise("^", out[2], out[3])), lim)
+end function
+
+Kyber.seedToHex = function(values)
+    hexTable = "0123456789abcdef"
+    res = ""
+    for v in values
+        r = ""
+        for j in range(8)
+            r = r + hexTable[floor(v/16^j) % 16]
+        end for
+        res = res + ("00000000" + r)[-8:]
+    end for
+    return res
+end function
+
+Kyber.hexToSeed = function(str)
+    hexTable = "0123456789abcdef"
+    res = []
+    for i in range(0, str.len - 1, 8)
+        h = str[i:i+8]
+        num = 0
+        for c in h
+            num = num * 16 + hexTable.indexOf(c)
+        end for
+        res.push(num)
+    end for
+    return res
+end function
+
+// Polynomial representation
+Polynomial = {}
+Polynomial.New = function(arr)
+    poly = new Polynomial
+    poly.values = arr + [0] * (Kyber.N - arr.len)
+    return poly
+end function
+
+Polynomial.mult = function(other)
+    if other isa Polynomial then
+        a = self.values + []
+        b = other.values + []
+        l = a.len + b.len
+        c = [0] * l
+        for i in range(0, a.len-1)
+            for j in range(0, b.len-1)
+                c[i+j] = modulo(c[i+j] + a[i] * b[j], Kyber.Q)
+            end for
+        end for
+        return Polynomial.New(c)
+    else if other isa number then
+        a = self.values + []
+        for i in range(0, a.len-1)
+            a[i] = modulo(a[i] * other, Kyber.Q)
+        end for
+        return Polynomial.New(a)
+    end if
+end function
+
+Polynomial.add = function(other)
+    if other isa Polynomial then
+        a = self.values
+        b = other.values
+        if a.len > b.len then
+            l = a.len
+        else
+            l = b.len
+        end if
+        c = [0] * l
+        for i in range(0, l-1)
+            if a.hasIndex(i) then
+                x = a[i]
+            else
+                x = 0
+            end if
+            if b.hasIndex(i) then
+                y = b[i]
+            else
+                y = 0
+            end if
+            c[i] = modulo(x + y, Kyber.Q)
+        end for
+        return Polynomial.New(c)
+    end if
+end function
+
+Polynomial.sub = function(other)
+    if other isa Polynomial then
+        a = self.values
+        b = other.values
+        if a.len > b.len then
+            l = a.len
+        else
+            l = b.len
+        end if
+        c = [0] * l
+        for i in range(0, l-1)
+            if a.hasIndex(i) then
+                x = a[i]
+            else
+                x = 0
+            end if
+            if b.hasIndex(i) then
+                y = b[i]
+            else
+                y = 0
+            end if
+            c[i] = modulo(x - y, Kyber.Q)
+        end for
+        return Polynomial.New(c)
+    end if
+end function
+
+Polynomial.encode = function
+    hexTable = "0123456789abcdef"
+    res = ""
+    for value in self.values
+        v = ""
+        for j in range(3)
+            v = v + hexTable[floor(value/16^j) % 16]
+        end for
+        res = res + ("000" + v)[-3:]
+    end for
+    return res
+end function
+
+Polynomial.decode = function(str)
+    hexTable = "0123456789abcdef"
+    res = []
+    for i in range(0, str.len - 1, 3)
+        h = str[i:i+3]
+        num = 0
+        for c in h
+            num = num * 16 + hexTable.indexOf(c)
+        end for
+        res.push(num)
+    end for
+    return Polynomial.New(res)
+end function
+
+// NTT
+NTT = new Polynomial
+NTT.zetas = [1, 1729, 2580, 3289, 2642, 630, 1897, 848, 1062, 1919, 193, 797, 2786, 3260, 569, 1746, 296, 2447, 1339, 1476, 3046, 56, 2240, 1333, 1426, 2094, 535, 2882, 2393, 2879, 1974, 821, 289, 331, 3253, 1756, 1197, 2304, 2277, 2055, 650, 1977, 2513, 632, 2865, 33, 1320, 1915, 2319, 1435, 807, 452, 1438, 2868, 1534, 2402, 2647, 2617, 1481, 648, 2474, 3110, 1227, 910, 17, 2761, 583, 2649, 1637, 723, 2288, 1100, 1409, 2662, 3281, 233, 756, 2156, 3015, 3050, 1703, 1651, 2789, 1789, 1847, 952, 1461, 2687, 939, 2308, 2437, 2388, 733, 2337, 268, 641, 1584, 2298, 2037, 3220, 375, 2549, 2090, 1645, 1063, 319, 2773, 757, 2099, 561, 2466, 2594, 2804, 1092, 403, 1026, 1143, 2150, 2775, 886, 1722, 1212, 1874, 1029, 2110, 2935, 885, 2154]
+NTT.gammas = [17, 3312, 2761, 568, 583, 2746, 2649, 680, 1637, 1692, 723, 2606, 2288, 1041, 1100, 2229, 1409, 1920, 2662, 667, 3281, 48, 233, 3096, 756, 2573, 2156, 1173, 3015, 314, 3050, 279, 1703, 1626, 1651, 1678, 2789, 540, 1789, 1540, 1847, 1482, 952, 2377, 1461, 1868, 2687, 642, 939, 2390, 2308, 1021, 2437, 892, 2388, 941, 733, 2596, 2337, 992, 268, 3061, 641, 2688, 1584, 1745, 2298, 1031, 2037, 1292, 3220, 109, 375, 2954, 2549, 780, 2090, 1239, 1645, 1684, 1063, 2266, 319, 3010, 2773, 556, 757, 2572, 2099, 1230, 561, 2768, 2466, 863, 2594, 735, 2804, 525, 1092, 2237, 403, 2926, 1026, 2303, 1143, 2186, 2150, 1179, 2775, 554, 886, 2443, 1722, 1607, 1212, 2117, 1874, 1455, 1029, 2300, 2110, 1219, 2935, 394, 885, 2444, 2154, 1175]
+NTT.ntt_f = 3303
+NTT.New = function(arr)
+    ntt = new NTT
+    ntt.values = arr + [0] * (Kyber.N - arr.len)
+    return ntt
+end function
+
+Polynomial.toNTT = function
+    coeffs = self.values + []
+    l = 128
+    k = 1
+    while l >= 2
+        start = 0
+        while start < 256
+            zeta = NTT.zetas[k]
+            k = k + 1
+            for j in range(start, start + l - 1)
+                t = modulo(zeta * coeffs[j + l], Kyber.Q)
+                coeffs[j + l] = modulo(coeffs[j] - t, Kyber.Q)
+                coeffs[j] = modulo(coeffs[j] + t, Kyber.Q)
+            end for
+            start = start + 2 * l
+        end while
+        l = bitwise(">>", l, 1)
+    end while
+    return NTT.New(coeffs)
+end function
+
+NTT.fromNTT = function
+    k = 127
+    l = 2
+    coeffs = self.values + []
+    while l <= 128
+        start = 0
+        while start < 256
+            zeta = NTT.zetas[k]
+            k = k - 1
+            for j in range(start, start + l - 1)
+                t = coeffs[j]
+                coeffs[j] = modulo(t + coeffs[j + l], Kyber.Q)
+                coeffs[j + l] = modulo(zeta * (coeffs[j + l] - t), Kyber.Q)
+            end for
+            start = start + 2 * l
+        end while
+        l = bitwise("<<", l, 1)
+    end while
+    for j in range(0, 255)
+        coeffs[j] = modulo(coeffs[j] * NTT.ntt_f, Kyber.Q)
+    end for
+    return Polynomial.New(coeffs)
+end function
+
+NTT.mult = function(other)
+    if other isa NTT then
+        a = self.values + []
+        b = other.values + []
+        c = [0] * Kyber.N
+        for i in range(0, 127)
+            j = 2 * i
+            k = 2 * i + 1
+            gamma = NTT.gammas[i]
+            a0 = a[j]
+            a1 = a[k]
+            b0 = b[j]
+            b1 = b[k]
+            c[j] = modulo(a0 * b0 + modulo(a1 * b1 * gamma, Kyber.Q), Kyber.Q)
+            c[k] = modulo(a0 * b1 + a1 * b0, Kyber.Q)
+        end for
+        return NTT.New(c)
+    end if
+end function
+
+NTT.add = function(other)
+    if other isa NTT then
+        a = self.values + []
+        b = other.values + []
+        for i in range(0, Kyber.N-1)
+            a[i] = modulo(a[i] + b[i], Kyber.Q)
+        end for
+        return NTT.New(a)
+    end if
+end function
+
+// Matrix
+Matrix = {}
+Matrix.New = function(data)
+    m = new Matrix
+    m.data = data
+    m.dims = [data.len, data[0].len]
+    return m
+end function
+
+Matrix.fromSeed = function(seeds, h, w, lim, offset=0)
+    Kyber.set_rand_seeds(seeds)
+    res = []
+    for i in range(h-1)
+        row = []
+        for j in range(w-1)
+            arr = []
+            for k in range(0, Kyber.N-1)
+                arr.push(Kyber.rand_det(lim) + offset)
+            end for
+            row.push(Polynomial.New(arr))
+        end for
+        res.push(row)
+    end for
+    return Matrix.New(res)
+end function
+
+Matrix.mult = function(other)
+    if self.data[0].len != other.data.len then
+        exit("Matrix dimension mismatch")
+    end if
+    out = []
+    for i in range(0, self.data.len-1)
+        for j in range(0, other.data[0].len-1)
+            res = NTT.New([0])
+            for k in range(0, self.data[i].len-1)
+                a = self.data[i][k]
+                b = other.data[k][j]
+                res = res.add(a.mult(b))
+            end for
+            if not out.hasIndex(i) then out.push([])
+            if not out[i].hasIndex(j) then out[i].push([])
+            out[i][j] = res
+        end for
+    end for
+    return Matrix.New(out)
+end function
+
+Matrix.add = function(other)
+    if self.dims[0] != other.dims[0] or self.dims[1] != other.dims[1] then
+        exit("Matrix dimension mismatch")
+    end if
+    out = []
+    for i in range(0, self.data.len-1)
+        for j in range(0, self.data[0].len-1)
+            if not out.hasIndex(i) then out.push([])
+            if not out[i].hasIndex(j) then out[i].push([])
+            out[i][j] = self.data[i][j].add(other.data[i][j])
+        end for
+    end for
+    return Matrix.New(out)
+end function
+
+Matrix.sub = function(other)
+    if self.dims[0] != other.dims[0] or self.dims[1] != other.dims[1] then
+        exit("Matrix dimension mismatch")
+    end if
+    out = []
+    for i in range(0, self.data.len-1)
+        for j in range(0, self.data[0].len-1)
+            if not out.hasIndex(i) then out.push([])
+            if not out[i].hasIndex(j) then out[i].push([])
+            out[i][j] = self.data[i][j].sub(other.data[i][j])
+        end for
+    end for
+    return Matrix.New(out)
+end function
+
+Matrix.transpose = function()
+    if not self.data[0] isa list then
+        data = [self.data]
+    else
+        data = self.data
+    end if
+    out = []
+    for i in range(0, data.len-1)
+        for j in range(0, data[i].len-1)
+            if not out.hasIndex(j) then out.push([])
+            if not out[j].hasIndex(i) then out[j].push(null)
+            out[j][i] = data[i][j]
+        end for
+    end for
+    return Matrix.New(out)
+end function
+
+Matrix.toNTT = function
+    res = []
+    for i in range(0, self.data.len-1)
+        for j in range(0, self.data[i].len-1)
+            if not res.hasIndex(i) then res.push([])
+            if not res[i].hasIndex(j) then res[i].push([])
+            res[i][j] = self.data[i][j].toNTT
+        end for
+    end for
+    return Matrix.New(res)
+end function
+
+Matrix.fromNTT = function
+    res = []
+    for i in range(0, self.data.len-1)
+        for j in range(0, self.data[i].len-1)
+            if not res.hasIndex(i) then res.push([])
+            if not res[i].hasIndex(j) then res[i].push([])
+            res[i][j] = self.data[i][j].fromNTT
+        end for
+    end for
+    return Matrix.New(res)
+end function
+
+Matrix.encode = function
+    res = []
+    for i in range(0, self.data.len-1)
+        row = []
+        for j in range(0, self.data[i].len-1)
+            row.push(self.data[i][j].encode)
+        end for
+        res.push(row.join(":"))
+    end for
+    return res.join(",")
+end function
+
+Matrix.decode = function(str)
+    res = []
+    for row in str.split(",")
+        r = []
+        for value in row.split(":")
+            r.push(Polynomial.decode(value))
+        end for
+        res.push(r)
+    end for
+    return Matrix.New(res)
+end function
+
+// Kyber public API
+Kyber.keygen = function()
+    rho_e = Kyber.rand_seed_secure
+    rho_s = Kyber.rand_seed_secure
+    rho_A = Kyber.rand_seed_secure
+    A = Matrix.fromSeed(rho_A, Kyber.K, Kyber.L, Kyber.Q)
+    e = Matrix.fromSeed(rho_e, Kyber.L, 1, Kyber.ETA_1)
+    s = Matrix.fromSeed(rho_s, Kyber.L, 1, Kyber.ETA_1)
+    t = A.toNTT.mult(s.toNTT).fromNTT.add(e)
+    return {"public": Kyber.seedToHex(rho_A) + "%" + t.encode, "private": Kyber.seedToHex(rho_s)}
+end function
+
+Kyber.encrypt = function(pubkey, message)
+    rho = Kyber.hexToSeed(pubkey.split("%")[0])
+    A = Matrix.fromSeed(rho, Kyber.K, Kyber.L, Kyber.Q)
+    t = Matrix.decode(pubkey.split("%")[1])
+    m = []
+    f = round(Kyber.Q/2)
+    for c in message
+        x = c.code
+        bin = []
+        while x > 0
+            y = x % 2
+            if y then
+                bin.insert(0, f)
+            else
+                bin.insert(0, 0)
+            end if
+            x = floor(x / 2)
+        end while
+        bin = [0] * (8 - bin.len) + bin
+        m = m + bin
+    end for
+    m = Polynomial.New(m)
+    rho_r = Kyber.rand_seed_secure
+    r = Matrix.fromSeed(rho_r, Kyber.L, 1, Kyber.ETA_1)
+    rho_e1 = Kyber.rand_seed_secure
+    rho_e2 = Kyber.rand_seed_secure
+    e1 = Matrix.fromSeed(rho_e1, Kyber.L, 1, Kyber.ETA_1)
+    e2 = Matrix.fromSeed(rho_e2, 1, 1, Kyber.ETA_1).data[0][0]
+    r_ = r.toNTT
+    u = A.transpose.toNTT.mult(r_).fromNTT.add(e1)
+    v = t.transpose.toNTT.mult(r_).fromNTT.data[0][0].add(e2).add(m)
+    return u.encode + "%" + v.encode
+end function
+
+Kyber.decrypt = function(privkey, ciphertext)
+    rho_s = Kyber.hexToSeed(privkey)
+    s = Matrix.fromSeed(rho_s, Kyber.L, 1, Kyber.ETA_1)
+    u = Matrix.decode(ciphertext.split("%")[0])
+    v = Polynomial.decode(ciphertext.split("%")[1])
+    m_noisy = v.sub(s.transpose.toNTT.mult(u.toNTT).fromNTT.data[0][0])
+    nearest = function(val, q)
+        d1 = abs(val - 0)
+        d2 = abs(val - round(Kyber.Q/2))
+        d3 = abs(val - q)
+        if d2 == [d1,d2,d3].min then
+            return 1
+        else
+            return 0
+        end if
+    end function
+    m_dec = []
+    for x in m_noisy.values
+        m_dec.push(nearest(x, Kyber.Q))
+    end for
+    m = ""
+    for i in range(floor(m_dec.len / 8) - 1, 0, -1)
+        bin = m_dec[i*8 : i*8+8]
+        c = 0
+        for b in range(0, 7)
+            c = c + bin[b] * 2^(7-b)
+        end for
+        if c != 0 then m = char(c) + m
+    end for
+    return m
+end function
+
+// Helper exports for botnet
+Kyber.generate_keypair = function() return Kyber.keygen() end function
+Kyber.encrypt_message = function(pubkey, msg) return Kyber.encrypt(pubkey, msg) end function
+Kyber.decrypt_message = function(privkey, cipher) return Kyber.decrypt(privkey, cipher) end function
+
+return Kyber

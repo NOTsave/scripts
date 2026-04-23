@@ -1,0 +1,63 @@
+# Grey Hack Scripts Deployment Guide
+
+## Prerequisites
+- Grey Hack game environment
+- Access to in-game terminal
+- Root or sudo privileges on target system
+
+## Directory Structure Setup
+
+### Create missing directories
+mkdir /bin
+mkdir /lib
+mkdir /data
+
+## Build and Install Scripts
+
+### Move compiled scripts to /bin (after building them)
+build /home/username/greyhack-scripts/scripts/exploit/exploit_payload.gs /bin/
+build /home/username/greyhack-scripts/bin/master_controller.gs /bin/
+build /home/username/greyhack-scripts/bin/slave.gs /bin/
+build /home/username/greyhack-scripts/bin/worm.gs /bin/
+
+## Copy Libraries
+
+cp /home/username/greyhack-scripts/lib/kyber_lib.gs /lib/
+cp /home/username/greyhack-scripts/lib/lib_common.gs /lib/
+
+## Copy Data Files
+
+cp /home/username/greyhack-scripts/data/samples.src /data/
+cp /home/username/greyhack-scripts/data/pregens.src /data/
+
+## Post-Installation
+
+### Verify installation
+ls /bin/*.gs
+ls /lib/*.gs
+ls /data/*.src
+
+### Set executable permissions (if needed)
+chmod +x /bin/master_controller.gs
+chmod +x /bin/slave.gs
+chmod +x /bin/worm.gs
+
+### Initialize master controller
+/bin/master_controller.gs
+
+### Deploy to target machines (requires root access)
+/bin/installer.gs <target_ip> <root_password>
+
+## Security Notes
+
+- Ensure /lib/kyber_lib.gs is properly implemented before deployment
+- Use strong passwords for backdoor accounts
+- Monitor /root/.botnet/log.txt for activity
+- Use /tmp/stop_watchdog to gracefully stop monitoring
+
+## Troubleshooting
+
+- If scripts fail to run, check file permissions
+- Verify all dependencies are in /lib/
+- Ensure target systems have required ports open
+- Check network connectivity before deployment
