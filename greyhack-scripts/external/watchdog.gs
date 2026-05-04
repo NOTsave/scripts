@@ -114,6 +114,27 @@ load_config = function()
             config.whitelist_folders.push(line)
         end if
     end for
+    
+    // Check for randomized names override
+    random_names_file = comp.File("/root/watchdog_config/random_names.dat")
+    if random_names_file then
+        random_data = random_names_file.get_content
+        if random_data then
+            parts = random_data.split("|")
+            if parts.len >= 1 then
+                proc_names = parts[0].split(",")
+                config.watch_procs = proc_names
+            end if
+            if parts.len >= 2 then
+                file_names = parts[1].split(",")
+                config.watch_files = []
+                for name in file_names
+                    config.watch_files.push(name + ".tmp")
+                end for
+            end if
+        end if
+    end if
+    
     return config
 end function
 
