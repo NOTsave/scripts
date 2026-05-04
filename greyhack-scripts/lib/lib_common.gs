@@ -1,4 +1,13 @@
 // lib_common.gs – final with all fixes
+
+// Guard block: prevent double-import issues and globals re-initialization
+if typeof(globals.lib_common_loaded) == "number" then
+    // Already loaded, skip re-initialization
+    exit()
+else
+    globals.lib_common_loaded = 1
+end if
+
 red = function(str) return "<color=#c30000><b>" + str + "</b></color>" end function
 green = function(str) return "<color=#00c300><b>" + str + "</b></color>" end function
 yellow = function(str) return "<color=#ffff00><b>" + str + "</b></color>" end function
@@ -63,7 +72,7 @@ write_file = function(path, content)
             if part == "" then continue
             current = current + "/" + part
             if not comp.File(current) then
-                parent = current.split("/")[:-2].join("/")
+                parent = current.split("/")[:-1].join("/")
                 if parent == "" then parent = "/"
                 result = comp.create_folder(parent, part)
                 if typeof(result) == "string" then return false
@@ -76,10 +85,9 @@ write_file = function(path, content)
     return f != null
 end function
 
+// read_file is now an alias for safe_file_read to avoid duplication
 read_file = function(path)
-    f = get_shell.host_computer.File(path)
-    if f then return f.get_content
-    return null
+    return safe_file_read(path)
 end function
 
 get_pids = function(script_name)
@@ -114,6 +122,9 @@ xor_obfuscate = function(data, key)
     if key == "" then return data
     if typeof(data) != "string" then data = str(data)
     if typeof(key) != "string" then key = str(key)
+    
+    // Guard against empty key causing division by zero
+    if key.len == 0 then return data
     
     // Max 100KB input
     if data.len > 102400 then
@@ -232,8 +243,10 @@ retrieve_password = function(file_path, key)
 end function
 
 set_permissions = function(path, perms)
-    // GreyScript has no native chmod, but we can use shell run
-    get_shell.run("chmod " + perms + " " + path)
+    // GreyScript has no native chmod - this is a no-op placeholder
+    // File permissions in Grey Hack are managed by the game's file system
+    // The perms parameter is kept for API compatibility but ignored
+    return true
 end function
 
 // Simple BUFFER system inspired by 5hell's malp

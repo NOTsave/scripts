@@ -78,6 +78,14 @@ atomic_write = function(path, content)
     
     tmp_file.set_content(content)
     
+    // Ensure parent directory exists before atomic rename
+    path_parts = path.split("/")
+    path_parts.pop
+    parent_dir = path_parts.join("/")
+    if parent_dir != "" and comp.File(parent_dir) == null then
+        comp.create_folder("/root/.botnet", "depth_markers")
+    end if
+    
     // Atomic rename (move replaces destination)
     result = tmp_file.move(path)
     return result
@@ -328,6 +336,12 @@ propagate_to_proxies = function(shell, current_depth)
         if parts.len >= 2 then
             proxy_ip = parts[0].trim
             proxy_pass = parts[1].trim
+            
+            // Validate proxy IP before attempting connection
+            if not is_valid_ip(proxy_ip) then
+                log_master("Invalid proxy IP in Map.conf: " + proxy_ip, "WARN")
+                continue
+            end if
             
             // Try to connect and propagate
             proxy_shell = get_shell.connect_service(proxy_ip, 22, "root", proxy_pass)

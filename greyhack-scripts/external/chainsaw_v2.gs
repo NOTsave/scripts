@@ -10,16 +10,8 @@ if get_custom_object.hasIndex("in_script") then
     in_script = get_custom_object.in_script
 end if
 
-logo_str = "
-   _____ _           _        _____
-  / ____| |         (_)      / ____|
- | |    | |__   __ _ | '_ \ \___ \ / _` \ \ /\ / /
- | |____| | | | (_| | | | | |____) | (_| |\ V  V /
-  \_____|_| |_|\__,_|_|_| |_|_____/ \__,_| \_/\_/
-
-"
-logo_str = logo_str + "ChainSaw v2 - Enhanced with pwgen tables - by NitroCynic\n"
-logo_str = logo_str + "Integrated with 5hell-style Markov chain tables\n"
+// Minimal header for headless bot execution - keeps author attribution
+logo_str = "ChainSaw v" + version + " by NitroCynic" + char(10)
 
 testing = false
 testing_pass = "Dessnap"
@@ -218,7 +210,7 @@ ChainSaw.chain_attack = function()
     
     // Generate and try passwords from chains
     tokens = ChainSaw.chains.indexes
-    for i in range(0, 1000)  // Limit attempts to prevent infinite loops
+    for i in range(0, 999)  // Limit to exactly 1000 attempts (0-999) to prevent infinite loops
         if tokens.len == 0 then break
         
         token = tokens[floor(rnd * tokens.len)]

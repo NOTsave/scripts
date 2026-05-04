@@ -76,6 +76,12 @@ end function
 
 // Attack using cerebrum dictionaries
 brutus.attack = function()
+    // Guard: cerebrum must be loaded before use
+    if typeof(cerebrum) != "map" then
+        brutus.Log("ERROR", "cerebrum not loaded - check import order")
+        return null
+    end if
+    
     brutus.Log("INFO", "Starting brutus dictionary attack...")
     brutus.start_time = time
     brutus.attempts = 0
