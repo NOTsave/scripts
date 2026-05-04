@@ -239,14 +239,17 @@ execute_command = function(cmd)
         if not safe_path(file_path) then return "ERROR|access denied"
         f = get_shell.host_computer.File(file_path)
         if f then return "FILE|" + f.get_content
+        return "ERROR|file not found"
     else if parts[0] == "rotate" then
-        import_code("/scripts/utils/watchdog_randomizer.gs")
         if typeof(rotate_watchdog_names) != "function" then
-            return "ERROR|rotate_watchdog_names function not defined"
+            import_code("/scripts/utils/watchdog_randomizer.gs")
         end if
-        rotate_watchdog_names()
-        return "ROTATED"
-        else return "ERROR|file not found"
+        if typeof(rotate_watchdog_names) == "function" then
+            rotate_watchdog_names()
+            return "ROTATED"
+        else
+            return "ERROR|watchdog_randomizer not available"
+        end if
     else
         return "UNKNOWN_COMMAND"
     end if

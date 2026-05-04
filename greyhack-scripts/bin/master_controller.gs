@@ -159,11 +159,12 @@ list_bots = function()
     bots = []
     bot_dir = comp.File(BOTNET_DIR)
     if bot_dir == null then return bots
-    files = bot_dir.get_files
-    if files == null then return bots
-    for f in files
+    for f in bot_dir.get_files
         if f == null then continue
-        if f.name[-4:] == ".enc" then bots.push(f.name[:-4])
+        name = f.name
+        if name.len > 4 then
+            if name[-4:] == ".pub" then bots.push(name[:-4])
+        end if
     end for
     return bots
 end function

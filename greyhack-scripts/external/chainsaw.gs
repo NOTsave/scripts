@@ -1,7 +1,11 @@
 // ChainSaw - A Grey Hack script for cracking passwords using Markov chains
 // by NitroCynic (fixed for GreyScript syntax – no '?' characters)
-import_code("data/samples.src")
-import_code("data/pregens.src")
+import_code("/data/samples.src")
+import_code("/data/pregens.src")
+
+// Newline constant to avoid char() function dependency
+NL = "
+"
 
 version = "1.0.0"
 
@@ -18,8 +22,8 @@ logo_str = "
   \_____|_| |_|\__,_|_|_| |_|_____/ \__,_| \_/\_/
 
 "
-logo_str = logo_str + "ChainSaw - by NitroCynic - The Markov Chain Password Cracker v" + version + "\n"
-logo_str = logo_str + "Source at: https://github.com/jwfraustro/chainsaw/ \n"
+logo_str = logo_str + "ChainSaw - by NitroCynic - The Markov Chain Password Cracker v" + version + NL
+logo_str = logo_str + "Source at: https://github.com/jwfraustro/chainsaw/ " + NL
 
 alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 alpha += alpha.lower

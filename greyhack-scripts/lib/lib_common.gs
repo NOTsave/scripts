@@ -13,7 +13,17 @@ rotate_log = function(log_path="/root/.botnet/log.txt", max_size_mb=10)
         f2 = comp.File(log_path + ".1")
         if f2 then f2.delete
         f.move(log_path + ".1")
-        comp.touch(log_path.split("/")[:-1].join("/"), log_path.split("/")[-1])
+        // Handle no-slash path (current directory) first
+        if log_path.indexOf("/") == null then
+            dir = "."
+            fname = log_path
+        else
+            parts = log_path.split("/")
+            fname = parts.pop()
+            dir = parts.join("/")
+            if dir == "" then dir = "/"
+        end if
+        comp.touch(dir, fname)
         log_master("Log rotated (was " + f.size + " bytes)", "INFO")
     end if
 end function

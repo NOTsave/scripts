@@ -1,6 +1,9 @@
 // wipe_logs.gs - Log wiper with silentclean-style corruption
 // Upgraded from simple zeroing to make detection harder
 // Usage: import_code("/scripts/utils/wipe_logs.gs")
+if typeof(safe_file_read) != "function" then
+    import_code("/lib/lib_common.gs")
+end if
 
 // Generate a decoy that looks like legitimate system files
 generate_decoy_content = function()
@@ -87,6 +90,11 @@ end function
 // Aggressive wipe - also removes /etc/passwd and sensitive files
 wipe_logs_aggressive = function(comp)
     if comp == null then comp = get_shell.host_computer
+    
+    // Guarded import to avoid circular dependency
+    if typeof(accessLevel) != "function" then
+        import_code("/scripts/utils/accessLevel.gs")
+    end if
     
     // Standard wipe first
     wipe_logs(comp)

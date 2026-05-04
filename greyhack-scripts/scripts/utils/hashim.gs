@@ -18,6 +18,7 @@ hashim.running = false
 hashim.total_processed = 0
 hashim.successful_cracks = 0
 hashim.start_time = 0
+hashim._initialized = false
 
 // Initialize hashim daemon
 hashim.init = function()
@@ -39,6 +40,7 @@ hashim.init = function()
     end if
     
     hashim.running = true
+    hashim._initialized = true
     hashim.start_time = time
     log_master("Hashim daemon initialized", "SUCCESS")
     return true
@@ -120,7 +122,8 @@ end function
 
 // Main daemon loop
 hashim.run = function()
-    if not hashim.init then
+    hashim.init()
+    if not hashim._initialized then
         log_master("Failed to initialize hashim daemon", "ERROR")
         return
     end if
