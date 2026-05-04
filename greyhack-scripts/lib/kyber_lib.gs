@@ -17,7 +17,7 @@ list_min = function(lst)
     if lst.len == 0 then return null
     cpy = lst + []
     cpy.sort(null, 0)
-    return cpy.pop()
+    return cpy[0]   // first element after ascending sort = minimum
 end function
 
 Kyber = {}
@@ -488,7 +488,7 @@ Kyber.decrypt = function(privkey, ciphertext)
     end for
     // Use list accumulation for better performance with long messages
     m_chars = []
-    for i in range(floor(m_dec.len / 8) - 1, 0, -1)
+    for i in range(floor(m_dec.len / 8) - 1, -1, -1)
         bin = m_dec[i*8 : i*8+8]
         c = 0
         for b in range(0, 7)

@@ -12,6 +12,53 @@ VERSION = "1.0"
 // Security: Whitelist allowed scripts and validate arguments
 allowed_scripts = ["/bin/slave.gs", "/bin/worm.gs", "/scripts/utils/wipe_logs.gs", "/scripts/utils/file_search.gs"]
 
+// Validate command structure before broadcasting
+validate_command = function(cmd)
+    if cmd == null then return false
+    if typeof(cmd) != "string" then return false
+    if cmd.len == 0 then return false
+    if cmd.len > 1024 then return false  // Max command length
+    
+    parts = cmd.split(" ")
+    if parts.len == 0 then return false
+    
+    // Check command is in allowed list
+    allowed = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
+    if allowed.indexOf(parts[0]) == null then return false
+    
+    // Validate each part contains only printable characters
+    for part in parts
+        for c in part
+            code = c.code
+            if code < 32 or code > 126 then return false
+        end for
+    end for
+    
+    // Validate argument structure based on command
+    if parts[0] == "run" then
+        if parts.len < 2 then return false
+        // Script path must not contain multiple consecutive slashes
+        script_path = parts[1]
+        if script_path.indexOf("//") != null then return false
+        // Max 4 additional args
+        if parts.len > 6 then return false
+    else if parts[0] == "worm" then
+        if parts.len < 3 then return false
+        // Depth must be a number
+        depth = parts[2].to_int
+        if typeof(depth) != "number" then return false
+        if depth < 0 or depth > 10 then return false
+    else if parts[0] == "kill" then
+        if parts.len < 2 then return false
+    else if parts[0] == "read" then
+        if parts.len < 2 then return false
+        // File path must not contain //
+        if parts[1].indexOf("//") != null then return false
+    end if
+    
+    return true
+end function
+
 validate_script_args = function(script, args)
     // Check if script is in whitelist
     if allowed_scripts.indexOf(script) == null then return false
@@ -68,7 +115,8 @@ init_master = function()
             // Key should exist now
             if read_file("/root/.botnet/master.priv") then return
             // If still no key after waiting, other process may have crashed
-            // Try again
+            log_master("Lock timeout waiting for keygen, aborting", "WARN")
+            return  // Don't proceed without the lock
         end if
         
         // We have the lock - double-check key doesn't exist
@@ -258,9 +306,13 @@ command_loop = function()
                 print(red("Usage: broadcast <command>"))
             else
                 cmd = parts[1:].join(" ")
-                for ip in list_bots()
-                    send_command(ip, cmd)
-                end for
+                if not validate_command(cmd) then
+                    print(red("Invalid broadcast command"))
+                else
+                    for ip in list_bots()
+                        send_command(ip, cmd)
+                    end for
+                end if
             end if
         else if parts[0] == "exit" then
             break

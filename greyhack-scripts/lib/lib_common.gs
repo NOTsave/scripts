@@ -115,7 +115,7 @@ backoff_sleep = function(attempt, base=2, max=300)
     wait(delay)
 end function
 
-// XOR obfuscation (defense-in-depth)
+// XOR obfuscation (defense-in-depth) - deprecated, kept only for migration
 xor_obfuscate = function(data, key)
     if data == null then return ""
     if key == null then return data
@@ -222,24 +222,27 @@ retrieve_password_kyber = function(file_path)
     return password
 end function
 
-// Keep old functions for backwards compatibility, but mark deprecated
+// Force migration from XOR to Kyber - no new XOR storage
 store_password = function(file_path, password, key)
-    if key == null then key = "botnet_key_2026"
-    if key == "" then key = "botnet_key_2026"
-    
-    log_master("WARN: Using deprecated XOR password storage, migrate to Kyber", "WARN")
-    obf = xor_obfuscate(password, key)
-    write_file(file_path, obf)
+    log_master("ERROR: XOR password storage deprecated, forcing migration to Kyber", "ERROR")
+    return store_password_kyber(file_path, password)
 end function
 
 retrieve_password = function(file_path, key)
-    if key == null then key = "botnet_key_2026"
-    if key == "" then key = "botnet_key_2026"
+    log_master("ERROR: XOR password retrieval deprecated, forcing migration to Kyber", "ERROR")
+    // Try to migrate existing XOR password
+    xor_data = safe_file_read(file_path)
+    if xor_data == null then return null
     
-    log_master("WARN: Using deprecated XOR password retrieval, migrate to Kyber", "WARN")
-    obf = read_file(file_path)
-    if obf == null then return null
-    return xor_obfuscate(obf, key)
+    // Migrate with hardcoded key one last time
+    password = xor_obfuscate(xor_data, "botnet_key_2026")
+    if password and password.len > 0 then
+        // Store with Kyber and delete old file
+        store_password_kyber(file_path + ".kyber", password)
+        get_shell.host_computer.File(file_path).delete
+        return password
+    end if
+    return null
 end function
 
 set_permissions = function(path, perms)
@@ -330,4 +333,27 @@ retry_network = function(func, max_attempts, base_delay)
     end for
     
     return null
+end function
+
+// RFC 1918 private IP detection - complete range coverage
+is_private_ip = function(ip)
+    if ip == null then return false
+    if typeof(ip) != "string" then return false
+    
+    // 192.168.0.0/16
+    if ip.indexOf("192.168.") == 0 then return true
+    
+    // 10.0.0.0/8
+    if ip.indexOf("10.") == 0 then return true
+    
+    // 172.16.0.0/12
+    if ip.indexOf("172.") == 0 then
+        parts = ip.split(".")
+        if parts.len >= 2 then
+            second = parts[1].to_int
+            if typeof(second) == "number" and second >= 16 and second <= 31 then return true
+        end if
+    end if
+    
+    return false
 end function

