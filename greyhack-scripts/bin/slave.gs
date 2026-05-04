@@ -109,11 +109,6 @@ init = function()
         set_permissions(MY_PRIVKEY_FILE, "600")
         write_file(MY_PUBKEY_FILE, keys.public)
         set_permissions(MY_PUBKEY_FILE, "644")
-        // Set restrictive permissions on key files
-        priv_file = comp.File(MY_PRIVKEY_FILE)
-        pub_file = comp.File(MY_PUBKEY_FILE)
-        if priv_file then priv_file.set_permission("600")
-        if pub_file then pub_file.set_permission("644")
         master_pub = read_file(MASTER_PUBKEY_FILE)
         if master_pub then
             write_file(RESPONSE_DIR + "/register.enc", Kyber.encrypt_message(master_pub, keys.public))

@@ -184,7 +184,7 @@ store_depth_marker = function(my_ip, my_depth)
 end function
 
 scan_lan = function()
-    router = get_router
+    router = get_router(null)
     if router == null then return []
     targets = []
     // FIXED: correct property name
@@ -192,6 +192,8 @@ scan_lan = function()
         if ip == my_ip then continue
         if infected.indexOf(ip) != null then continue
         if SOURCE_IP != null and ip == SOURCE_IP then continue
+        // RFC 1918 LAN guard - only scan private IPs
+        if not (ip.indexOf("192.168.") == 0 or ip.indexOf("10.") == 0) then continue
         targets.push(ip)
     end for
     return targets

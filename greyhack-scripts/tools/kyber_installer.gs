@@ -72,7 +72,8 @@ end if
 // Delete source for security
 src_file = comp.File("/server/decode.bin.src")
 if src_file then
-    if src_file.delete == "" then 
+    del_result = src_file.delete
+    if del_result == "" then 
         print("Successfully deleted decoding source code!") 
     else 
         exit("Could not delete decoding source code! (Leaks private key!)")

@@ -9,7 +9,7 @@ if not shell then exit("Cannot connect to target")
 // Upload files
 files = ["/bin/slave.gs", "/bin/worm.gs", "/lib/kyber_lib.gs", "/lib/lib_common.gs", "/root/.botnet/master.pub"]
 for f in files
-    shell.scp_upload(f, f)
+    get_shell.scp(f, "/root/.botnet/", shell)
 end for
 
 shell.run("mkdir -p /root/.botnet/commands /root/.botnet/responses")

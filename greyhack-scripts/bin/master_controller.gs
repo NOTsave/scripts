@@ -132,8 +132,17 @@ end function
 
 collect_responses = function()
     for ip in list_bots()
-        shell = get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
-        if typeof(shell) == "string" then continue
+        // Use retry_network wrapper for connection resilience
+        connect_func = function()
+            return get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
+        end function
+        
+        shell = retry_network(connect_func, 3, 2)
+        if typeof(shell) == "string" or shell == null then
+            log_master("Failed to collect from " + sanitize_ip(ip) + " after retries", "WARN")
+            continue
+        end if
+        
         resp_dir = shell.host_computer.File("/root/.botnet/responses")
         if resp_dir == null then continue
         for f in resp_dir.get_files
