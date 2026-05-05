@@ -308,6 +308,7 @@ monitor_all_processes = function()
             // Get process owner
             owner = parts[0]
             current_user = active_user
+            if current_user == null then current_user = "root"
             if owner != current_user and owner != "root" then
                 log_message("Refused to kill process " + pname + " owned by " + owner)
                 print("<color=orange>[!] Refused to kill process " + pname + " owned by " + owner + "</color>")

@@ -160,8 +160,8 @@ end function
 // Fallback to original chain-based generation if tables fail
 ChainSaw.init_chains = function()
     ChainSaw.Log("INFO", "Initializing fallback Markov chains...")
-    import_code("data/samples.src")
-    import_code("data/pregens.src")
+    import_code("/data/samples.src")
+    import_code("/data/pregens.src")
     
     ChainSaw.samples = samples
     ChainSaw.pregens = pregens

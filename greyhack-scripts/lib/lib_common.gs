@@ -3,7 +3,7 @@
 // Guard block: prevent double-import issues and globals re-initialization
 if typeof(globals.lib_common_loaded) == "number" then
     // Already loaded, skip re-initialization
-    exit()
+    return
 else
     globals.lib_common_loaded = 1
 end if
@@ -19,21 +19,21 @@ rotate_log = function(log_path="/root/.botnet/log.txt", max_size_mb=10)
     f = comp.File(log_path)
     if not f then return
     if f.size > max_size_mb * 1024 * 1024 then
-        f2 = comp.File(log_path + ".1")
-        if f2 then f2.delete
-        f.move(log_path + ".1")
-        // Handle no-slash path (current directory) first
-        if log_path.indexOf("/") == null then
-            dir = "."
-            fname = log_path
+        old_size = f.size
+        backup = comp.File(log_path + ".1")
+        if backup then
+            backup.set_content(f.get_content())
         else
+            // Create backup file if it doesn't exist
             parts = log_path.split("/")
-            fname = parts.pop()
+            filename = parts.pop() + ".1"
             dir = parts.join("/")
             if dir == "" then dir = "/"
+            comp.touch(dir, filename)
+            comp.File(log_path + ".1").set_content(f.get_content())
         end if
-        comp.touch(dir, fname)
-        log_master("Log rotated (was " + f.size + " bytes)", "INFO")
+        f.set_content("")
+        print("[rotate_log] Log rotated (was " + old_size + " bytes)")
     end if
 end function
 
@@ -305,7 +305,7 @@ safe_file_write = function(path, content)
     if f == null then
         // Create if doesn't exist
         parts = path.split("/")
-        name = parts.pop
+        name = parts.pop()()
         dir = parts.join("/")
         if dir == "" then dir = "/"
         get_shell.host_computer.touch(dir, name)

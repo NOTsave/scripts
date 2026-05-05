@@ -61,6 +61,15 @@ end if
 
 log_master("Worm started on " + my_ip_safe + " at depth " + CURRENT_DEPTH + "/" + MAX_DEPTH, "INFO")
 
+// Ensure depth markers directory exists once at startup
+comp = get_shell.host_computer
+if not comp.File(DEPTH_MARKER_DIR) then
+    comp.create_folder("/root/.botnet", "depth_markers")
+end if
+
+// Cache router to avoid repeated calls
+globals.my_router = null
+
 // Atomic write helper for depth markers
 atomic_write = function(path, content)
     comp = get_shell.host_computer
@@ -78,23 +87,26 @@ atomic_write = function(path, content)
     
     tmp_file.set_content(content)
     
-    // Ensure parent directory exists before atomic rename
+    // Ensure parent directory exists before atomic write
     path_parts = path.split("/")
     path_parts.pop
     parent_dir = path_parts.join("/")
-    if parent_dir != "" and comp.File(parent_dir) == null then
-        comp.create_folder("/root/.botnet", "depth_markers")
-    end if
+    // Directory already created at startup, no need to check again
     
-    // Atomic rename (move replaces destination)
-    result = tmp_file.move(path)
-    return result
+    // Atomic write: copy to destination, then delete temp
+    tmp_file.copy(path)
+    dest_file = comp.File(path)
+    if dest_file then
+        tmp_file.delete
+        return true
+    end if
+    return false
 end function
 
 // Depth verification functions
 verify_depth_chain = function(parent_ip, claimed_depth)
     comp = get_shell.host_computer
-    comp.create_folder("/root/.botnet", "depth_markers")
+    // Directory already created at startup
     
     // Check if depth markers directory itself was tampered with
     // by comparing against an encrypted immutable marker
@@ -162,7 +174,7 @@ end function
 
 store_depth_marker = function(my_ip, my_depth)
     comp = get_shell.host_computer
-    comp.create_folder("/root/.botnet", "depth_markers")
+    // Directory already created at startup
     
     // Local marker - atomic write
     marker_path = DEPTH_MARKER_DIR + "/" + my_ip.replace(".", "_")
@@ -194,7 +206,14 @@ store_depth_marker = function(my_ip, my_depth)
 end function
 
 scan_lan = function()
-    router = get_router(null)
+    if globals.my_router == null then
+        globals.my_router = get_router(my_ip)
+        if globals.my_router == null then
+            // fallback: try lan_ip
+            globals.my_router = get_router(get_shell.host_computer.lan_ip)
+        end if
+    end if
+    router = globals.my_router
     if router == null then return []
     targets = []
     // FIXED: correct property name

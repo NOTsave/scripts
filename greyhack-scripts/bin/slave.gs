@@ -4,6 +4,7 @@ import_code("/lib/lib_common.gs")
 import_code("/scripts/utils/wipe_logs.gs")
 import_code("/scripts/utils/sanitize_ip.gs")
 import_code("/scripts/utils/accessLevel.gs")
+import_code("/scripts/utils/watchdog_randomizer.gs")
 
 CONFIG_DIR = "/root/.botnet"
 PID_FILE = CONFIG_DIR + "/slave.pid"
@@ -239,20 +240,8 @@ execute_command = function(cmd)
         if f then return "FILE|" + f.get_content
         return "ERROR|file not found"
     else if parts[0] == "rotate" then
-        // Try to import watchdog_randomizer with error handling
-        randomizer_loaded = false
-        if typeof(rotate_watchdog_names) != "function" then
-            // Use get_shell.launch to test if file exists first
-            test_file = get_shell.host_computer.File("/scripts/utils/watchdog_randomizer.gs")
-            if test_file != null then
-                import_code("/scripts/utils/watchdog_randomizer.gs")
-                randomizer_loaded = true
-            end if
-        else
-            randomizer_loaded = true
-        end if
-        
-        if randomizer_loaded and typeof(rotate_watchdog_names) == "function" then
+        // watchdog_randomizer is now imported at top level
+        if typeof(rotate_watchdog_names) == "function" then
             rotate_watchdog_names()
             return "ROTATED"
         else

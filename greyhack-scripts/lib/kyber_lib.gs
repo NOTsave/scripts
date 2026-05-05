@@ -3,7 +3,7 @@
 // Guard block: prevent double-import issues and Kyber re-initialization
 if typeof(globals.kyber_lib_loaded) == "number" then
     // Already loaded, skip re-initialization
-    exit()
+    return
 else
     globals.kyber_lib_loaded = 1
 end if
@@ -488,19 +488,26 @@ Kyber.decrypt = function(privkey, ciphertext)
     end for
     // Use list accumulation for better performance with long messages
     m_chars = []
-    for i in range(floor(m_dec.len / 8) - 1, -1, -1)
+    // Manual reverse iteration for better compatibility
+    i = floor(m_dec.len / 8) - 1
+    while i >= 0
         bin = m_dec[i*8 : i*8+8]
         c = 0
         for b in range(0, 7)
             c = c + bin[b] * 2^(7-b)
         end for
         if c != 0 then m_chars.push(char(c))
-    end for
+        i = i - 1
+    end while
+    
     // Reverse the list and join
     m = ""
-    for i in range(m_chars.len - 1, 0, -1)
+    // Manual reverse iteration for better compatibility
+    i = m_chars.len - 1
+    while i >= 0
         if m_chars.hasIndex(i) then m = m + m_chars[i]
-    end for
+        i = i - 1
+    end while
     return m
 end function
 

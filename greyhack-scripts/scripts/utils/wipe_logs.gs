@@ -40,9 +40,6 @@ end function
 safe_delete = function(file_obj, path)
     if file_obj == null then return false
     
-    // Check if file exists
-    if file_obj.path == null then return false
-    
     // Check write permission on parent directory
     parts = path.split("/")
     filename = parts.pop

@@ -33,7 +33,7 @@ pwgen.build_chains = function()
     
     for text in pwgen.samples
         text = text.upper
-        for i in range(0, len(text) - pwgen.order - 1)
+        for i in range(0, len(text) - pwgen.order)
             sub_text = text[i : i + pwgen.order]
             if not pwgen.chains.hasIndex(sub_text) then 
                 pwgen.chains[sub_text] = []

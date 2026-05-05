@@ -43,12 +43,17 @@ accessLevel = function(result)
     
     if comp == null then return "unknown"
     
-    // Test root by attempting set_owner on /etc
-    etcFolder = comp.File("/etc")
-    if etcFolder != null then
-        // Empty string return means success (root)
-        setOwnerResult = etcFolder.set_owner("root")
-        if setOwnerResult == "" then return "root"
+    // Test root by attempting to create a file in /root
+    // This is non-destructive and tests actual write permissions
+    test_name = ".root_test_" + str(floor(rnd * 9999))
+    testFile = comp.File("/root/" + test_name)
+    if testFile != null then
+        testContent = "access_test"
+        testFile.set_content(testContent)
+        if testFile.get_content == testContent then
+            testFile.delete  // Clean up
+            return "root"
+        end if
     end if
     
     // Check for user level — look for readable /home subfolders

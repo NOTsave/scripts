@@ -29,7 +29,17 @@ hashim.init = function()
     end if
     
     // Write PID file
-    write_file(HASHIM_PID, str(get_shell.host_computer.show_procs.split(char(10))[0].split(" ")[1]))
+    current_pids = get_pids("hashim.gs")
+    if current_pids.len > 1 then
+        print("Hashim already running, PID: " + str(current_pids[0]))
+        return false
+    end if
+    // len is 0 or 1 - write current PID either way
+    if current_pids.len == 1 then
+        write_file(HASHIM_PID, str(current_pids[0]))
+    else
+        write_file(HASHIM_PID, str(get_shell.pid))
+    end if
     
     // Initialize queue and results files
     if not get_shell.host_computer.File(HASHIM_QUEUE) then

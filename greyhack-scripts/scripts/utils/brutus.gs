@@ -62,16 +62,12 @@ brutus.test_remote = function(password)
     
     // Try to connect from the remote shell to the target
     if brutus.ip != "" then
-        cmd = "connect_service " + brutus.ip + " " + brutus.port + " " + brutus.user + " " + password
+        // Use the remote shell's connect_service method directly
+        return brutus.shell.connect_service(brutus.ip, brutus.port, brutus.user, password)
     else
-        cmd = "get_shell " + brutus.user + " " + password
+        // For local shell access from remote, use get_shell
+        return brutus.shell.get_shell(brutus.user, password)
     end if
-    
-    // This is a simplified version - in real GLASSPOOL this would be more sophisticated
-    result = brutus.shell.run(cmd)
-    
-    // For simulation, we'll use the local method
-    return brutus.test_local(password)
 end function
 
 // Attack using cerebrum dictionaries

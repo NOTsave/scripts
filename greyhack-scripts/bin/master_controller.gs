@@ -99,9 +99,9 @@ end function
 init_master = function()
     comp = get_shell.host_computer
     comp.create_folder("/root", ".botnet")
-    comp.create_folder(BOTNET_DIR, "bots")
-    comp.create_folder(COMMAND_QUEUE_DIR, "outgoing")
-    comp.create_folder(INCOMING_DIR, "incoming")
+    comp.create_folder("/root/.botnet", "bots")
+    comp.create_folder("/root/.botnet", "outgoing")
+    comp.create_folder("/root/.botnet", "incoming")
     
     if not read_file("/root/.botnet/master.priv") then
         lock_path = "/root/.botnet/keygen.lock"
