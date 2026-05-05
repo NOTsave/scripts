@@ -1,12 +1,15 @@
-// kyber_lib.gs - Complete Kyber implementation for botnet (no ternary, no backslashes)
+// ======================================
+// kyber_lib.gs
+// CRYSTALS-Kyber-512 post-quantum KEM
+// Key generation, encryption, decryption
+// Dependencies: None (self-contained)
+// ======================================
 
 // Guard block: prevent double-import issues and Kyber re-initialization
-if typeof(globals.kyber_lib_loaded) == "number" then
-    // Already loaded, skip re-initialization
+if globals.hasIndex("kyber_lib_loaded") then
     return
-else
-    globals.kyber_lib_loaded = 1
 end if
+globals.kyber_lib_loaded = true
 
 modulo = function(num, mod)
     return num - mod * floor(num / mod)
@@ -30,15 +33,63 @@ Kyber.New = function()
     return new Kyber
 end function
 
-// 128 bit seed - mix time with rnd to avoid deterministic seeding per session
-Kyber.RAND = [floor((rnd + time % 1000) * 2^16), floor(rnd * 2^16), floor((rnd + current_date.len) * 2^16), floor(rnd * 2^16), floor((rnd + time % 100) * 2^16), floor(rnd * 2^16), floor((rnd + time % 10) * 2^16), floor(rnd * 2^16)]
-Kyber.rand_seed_secure = function
+// ============================================
+// Kyber PRNG: Simple LCG for in-game purposes
+// Not cryptographically strong, but sufficient
+// for Grey Hack context where rnd is game-seeded
+// ============================================
+
+Kyber.Q = 3329
+Kyber.N = 256
+Kyber.K = 2
+Kyber.L = 2
+Kyber.ETA_1 = 5
+
+// LCG state — initialized with time for diversity
+Kyber._lcg_state = (time * 1103515245 + 12345) % (2^31)
+
+// Initialize seed array with time-based entropy
+Kyber.RAND = [
+    (time % 10000) * 65536 + 1,
+    ((time * 3) % 10000) * 65536 + 2,
+    ((time * 7) % 10000) * 65536 + 3,
+    ((time * 11) % 10000) * 65536 + 4,
+    ((time * 13) % 10000) * 65536 + 5,
+    ((time * 17) % 10000) * 65536 + 6,
+    ((time * 19) % 10000) * 65536 + 7,
+    ((time * 23) % 10000) * 65536 + 8
+]
+
+// LCG-based random number generator
+// Replaces attempts to call rnd(seed)
+Kyber.lcg_next = function()
+    Kyber._lcg_state = (Kyber._lcg_state * 1103515245 + 12345) % (2^31)
+    return Kyber._lcg_state / (2^31)
+end function
+
+// Generate 8 secure-ish random 32-bit values
+Kyber.rand_seed_secure = function()
     out = [0,0,0,0,0,0,0,0]
-    for i in range(Kyber.RAND.len - 1)
-        Kyber.RAND[i] = floor(rnd(Kyber.RAND[i]) * 2^16)
-        out[i] = floor(rnd * 2^16)
+    for i in range(0, 7)
+        // Mix LCG output with game rnd and time
+        lcg_val = floor(Kyber.lcg_next * 65536)
+        game_rnd = floor(rnd * 65536)
+        time_val = (time + i * 997) % 65536
+        
+        // Combine via XOR for mixing
+        combined = bitwise("^", lcg_val, bitwise("^", game_rnd, time_val))
+        out[i] = combined % Kyber.Q
     end for
     return out
+end function
+
+// Reset PRNG state (useful for testing or re-keying)
+Kyber.reset_prng = function()
+    Kyber._lcg_state = (time * 1103515245 + 12345) % (2^31)
+end function
+
+Kyber.New = function()
+    return new Kyber
 end function
 
 Kyber.RAND_DET = [0,0,0,0,0,0,0,0]
@@ -48,8 +99,9 @@ end function
 Kyber.rand_det = function(lim=Kyber.Q)
     out = [0,0,0,0,0,0,0,0]
     for i in range(Kyber.RAND_DET.len - 1)
-        Kyber.RAND_DET[i] = floor(rnd(Kyber.RAND_DET[i]) * 2^16)
-        out[i] = floor(rnd * 2^16)
+        // FIXED: Don't call rnd() with parameters
+        Kyber.RAND_DET[i] = floor(rnd * 65536)
+        out[i] = floor(rnd * 65536)
     end for
     return modulo(bitwise("|", bitwise("^", out[0], out[1]), bitwise("^", out[2], out[3])), lim)
 end function

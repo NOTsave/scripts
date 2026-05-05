@@ -1,12 +1,15 @@
-// lib_common.gs – final with all fixes
+// ======================================
+// lib_common.gs
+// Shared utilities: logging, file ops,
+// encryption wrappers, retry logic
+// Dependencies: kyber_lib.gs
+// ======================================
 
 // Guard block: prevent double-import issues and globals re-initialization
-if typeof(globals.lib_common_loaded) == "number" then
-    // Already loaded, skip re-initialization
+if globals.hasIndex("lib_common_loaded") then
     return
-else
-    globals.lib_common_loaded = 1
 end if
+globals.lib_common_loaded = true
 
 red = function(str) return "<color=#c30000><b>" + str + "</b></color>" end function
 green = function(str) return "<color=#00c300><b>" + str + "</b></color>" end function
@@ -14,7 +17,8 @@ yellow = function(str) return "<color=#ffff00><b>" + str + "</b></color>" end fu
 blue = function(str) return "<color=#85b8ff><b>" + str + "</b></color>" end function
 white = function(str) return "<color=#eeeeee><b>" + str + "</b></color>" end function
 
-rotate_log = function(log_path="/root/.botnet/log.txt", max_size_mb=10)
+rotate_log = function(log_path=null, max_size_mb=10)
+    if log_path == null then log_path = get_config("paths.botnet_root") + "/log.txt"
     comp = get_shell.host_computer
     f = comp.File(log_path)
     if not f then return
@@ -37,19 +41,51 @@ rotate_log = function(log_path="/root/.botnet/log.txt", max_size_mb=10)
     end if
 end function
 
+globals.log_level = "INFO"
+globals.current_script = "unknown"
 globals.log_write_count = 0
-log_master = function(msg, level="INFO")
+globals.log_buffer = []
+globals.log_buffer_size = 50
+
+flush_log_buffer = function()
+    if globals.log_buffer.len == 0 then return
+    
     comp = get_shell.host_computer
-    log_file = comp.File("/root/.botnet/log.txt")
+    log_path = get_config("paths.botnet_root") + "/log.txt"
+    log_file = comp.File(log_path)
     if not log_file then
         comp.create_folder("/root", ".botnet")
         comp.touch("/root/.botnet", "log.txt")
-        log_file = comp.File("/root/.botnet/log.txt")
+        log_file = comp.File(log_path)
     end if
-    timestamp = current_date
-    log_file.set_content(log_file.get_content + "[" + timestamp + "] [" + level + "] " + msg + char(10))
-    globals.log_write_count = globals.log_write_count + 1
-    if globals.log_write_count % 50 == 0 then rotate_log()
+    
+    if log_file then
+        current_content = log_file.get_content
+        if current_content == null then current_content = ""
+        new_content = current_content + globals.log_buffer.join("")
+        log_file.set_content(new_content)
+        globals.log_buffer = []
+        globals.log_write_count = globals.log_write_count + globals.log_buffer_size
+        if globals.log_write_count % 100 == 0 then rotate_log()
+    end if
+end function
+
+log_master = function(msg, level)
+    if level == null then level = "INFO"
+    levels = {"DEBUG":0, "INFO":1, "WARN":2, "ERROR":3}
+    min_lvl = levels[globals.log_level]
+    if min_lvl == null then min_lvl = 1
+    if levels[level] < min_lvl then return
+    
+    timestamp = current_date + " " + str(time % 86400)
+    entry = "[" + timestamp + "] [" + level + "] [" + globals.current_script + "] " + msg + char(10)
+    
+    globals.log_buffer.push(entry)
+    
+    if globals.log_buffer.len >= globals.log_buffer_size then
+        flush_log_buffer()
+    end if
+    
     if level == "ERROR" then
         print(red(msg))
     else if level == "WARN" then
@@ -59,6 +95,18 @@ log_master = function(msg, level="INFO")
     else
         print(white(msg))
     end if
+end function
+
+sanitize_input = function(input)
+    if input == null then return ""
+    if typeof(input) != "string" then return ""
+    allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_/ "
+    result = ""
+    for c in input
+        if allowed.indexOf(c) != null then result = result + c
+        if result.len >= 256 then break
+    end for
+    return result
 end function
 
 write_file = function(path, content)
@@ -151,36 +199,27 @@ generate_random_string = function(len)
     return result
 end function
 
-// Kyber-encrypted password storage (preferred)
+// ============================================
+// Kyber-only password storage (XOR deprecated)
+// Migration from XOR handled separately
+// ============================================
+
+// Store password encrypted with Kyber
 store_password_kyber = function(file_path, password)
-    if password == null then return false
-    if file_path == null then return false
+    if password == null or password == "" then return false
+    if file_path == null or file_path == "" then return false
     
+    comp = get_shell.host_computer
+    
+    // Get encryption key — try slave.pub first, then passkey.pub
     pub = safe_file_read("/root/.botnet/slave.pub")
-    if not pub then
-        // Generate ephemeral keypair for this password
-        keys = Kyber.generate_keypair()
-        if keys == null then
-            log_master("ERROR: Kyber key generation failed", "ERROR")
-            return false
-        end if
-        if keys.private == null or keys.public == null then
-            log_master("ERROR: Kyber generated invalid keypair", "ERROR")
-            return false
-        end if
-        
-        if not safe_file_write("/root/.botnet/passkey.priv", keys.private) then
-            log_master("ERROR: Failed to write passkey.priv", "ERROR")
-            return false
-        end if
-        set_permissions("/root/.botnet/passkey.priv", "600")
-        
-        if not safe_file_write("/root/.botnet/passkey.pub", keys.public) then
-            log_master("ERROR: Failed to write passkey.pub", "ERROR")
-            return false
-        end if
-        
-        pub = keys.public
+    if pub == null then
+        pub = safe_file_read("/root/.botnet/passkey.pub")
+    end if
+    
+    if pub == null then
+        log_master("ERROR: No public key available for password encryption", "ERROR")
+        return false
     end if
     
     cipher = Kyber.encrypt_message(pub, password)
@@ -190,7 +229,7 @@ store_password_kyber = function(file_path, password)
     end if
     
     if not safe_file_write(file_path, cipher) then
-        log_master("ERROR: Failed to write encrypted password to " + file_path, "ERROR")
+        log_master("ERROR: Failed to write encrypted password", "ERROR")
         return false
     end if
     
@@ -198,17 +237,20 @@ store_password_kyber = function(file_path, password)
     return true
 end function
 
+// Retrieve password encrypted with Kyber
 retrieve_password_kyber = function(file_path)
-    if file_path == null then return null
+    if file_path == null or file_path == "" then return null
     
     cipher = safe_file_read(file_path)
-    if not cipher then return null
+    if cipher == null then return null
     
+    // Try slave private key first, then passkey private key
     priv = safe_file_read("/root/.botnet/slave.priv")
-    if not priv then
+    if priv == null then
         priv = safe_file_read("/root/.botnet/passkey.priv")
     end if
-    if not priv then
+    
+    if priv == null then
         log_master("ERROR: No private key available for password decryption", "ERROR")
         return null
     end if
@@ -222,27 +264,52 @@ retrieve_password_kyber = function(file_path)
     return password
 end function
 
-// Force migration from XOR to Kyber - no new XOR storage
-store_password = function(file_path, password, key)
-    log_master("ERROR: XOR password storage deprecated, forcing migration to Kyber", "ERROR")
-    return store_password_kyber(file_path, password)
-end function
-
-retrieve_password = function(file_path, key)
-    log_master("ERROR: XOR password retrieval deprecated, forcing migration to Kyber", "ERROR")
-    // Try to migrate existing XOR password
-    xor_data = safe_file_read(file_path)
-    if xor_data == null then return null
+// One-time migration from XOR to Kyber
+// Call during master initialization, after slave keypair is available
+migrate_xor_passwords_to_kyber = function()
+    comp = get_shell.host_computer
+    botnet_dir = comp.File("/root/.botnet")
     
-    // Migrate with hardcoded key one last time
-    password = xor_obfuscate(xor_data, "botnet_key_2026")
-    if password and password.len > 0 then
-        // Store with Kyber and delete old file
-        store_password_kyber(file_path + ".kyber", password)
-        get_shell.host_computer.File(file_path).delete
-        return password
+    if botnet_dir == null then return false
+    
+    files = botnet_dir.get_files
+    if files == null then return true  // No files to migrate
+    
+    migrated_count = 0
+    
+    for f in files
+        if f == null then continue
+        
+        // Look for legacy XOR password files: backdoor_pass_<IP>
+        if f.name.indexOf("backdoor_pass_") == 0 and f.name.indexOf(".enc") == -1 then
+            ip = f.name[15:]  // Extract IP from filename
+            
+            // Read XOR-encrypted password
+            xor_data = f.get_content
+            if xor_data == null or xor_data == "" then continue
+            
+            // Decrypt XOR
+            password = xor_obfuscate(xor_data, "botnet_key_2026")
+            if password == null or password == "" then continue
+            
+            // Encrypt with Kyber
+            kyber_path = "/root/.botnet/backdoor_pass_" + ip + ".enc"
+            if store_password_kyber(kyber_path, password) then
+                // Delete original XOR file
+                f.delete
+                migrated_count = migrated_count + 1
+                log_master("Migrated password for " + ip + " to Kyber", "INFO")
+            else
+                log_master("Failed to migrate password for " + ip, "WARN")
+            end if
+        end if
+    end for
+    
+    if migrated_count > 0 then
+        log_master("Password migration complete: " + str(migrated_count) + " passwords migrated", "SUCCESS")
     end if
-    return null
+    
+    return true
 end function
 
 set_permissions = function(path, perms)
@@ -300,20 +367,121 @@ safe_file_read = function(path)
     return content
 end function
 
+// ============================================
+// Safe file write with directory creation
+// Returns: true on success, false on failure
+// ============================================
+
 safe_file_write = function(path, content)
-    f = get_shell.host_computer.File(path)
-    if f == null then
-        // Create if doesn't exist
-        parts = path.split("/")
-        name = parts.pop()()
-        dir = parts.join("/")
-        if dir == "" then dir = "/"
-        get_shell.host_computer.touch(dir, name)
-        f = get_shell.host_computer.File(path)
-        if f == null then return false
+    if path == null or path == "" then return false
+    if content == null then content = ""
+    
+    comp = get_shell.host_computer
+    if comp == null then return false
+    
+    // Parse path
+    parts = path.split("/")
+    if parts.len < 2 then return false
+    
+    // Extract filename (last element) — BUG FIX: Use variable, not pop()()
+    filename = parts[parts.len - 1]
+    parts.pop  // Remove filename from path
+    
+    // Reconstruct directory path
+    dir_path = parts.join("/")
+    if dir_path == "" then dir_path = "/"
+    
+    // Verify parent directory exists or can be created
+    parent = comp.File(dir_path)
+    if parent == null then
+        // Parent doesn't exist — attempt to create it
+        // This is recursive: create intermediate directories if needed
+        if not ensure_directory_exists(dir_path) then
+            return false
+        end if
     end if
+    
+    // Create/overwrite the file
+    if comp.File(path) == null then
+        touch_result = comp.touch(dir_path, filename)
+        if touch_result == null or typeof(touch_result) == "string" then
+            return false
+        end if
+    end if
+    
+    // Write content
+    f = comp.File(path)
+    if f == null then return false
+    
     f.set_content(content)
+    
+    // Verify write succeeded
+    f = comp.File(path)
+    if f == null then return false
+    
+    written = f.get_content
+    if written != content then
+        return false  // Content mismatch — write failed
+    end if
+    
     return true
+end function
+
+// Helper: Ensure directory path exists, creating intermediate dirs as needed
+ensure_directory_exists = function(dir_path)
+    if dir_path == "" or dir_path == "/" then return true
+    
+    comp = get_shell.host_computer
+    current = comp.File(dir_path)
+    
+    if current != null then
+        if current.is_folder then return true
+        return false  // Path exists but is not a directory
+    end if
+    
+    // Directory doesn't exist — create it
+    // Split path and create each level
+    parts = dir_path.split("/")
+    current_path = ""
+    
+    for part in parts
+        if part == "" then continue
+        
+        if current_path == "" then
+            current_path = "/" + part
+        else
+            current_path = current_path + "/" + part
+        end if
+        
+        check = comp.File(current_path)
+        if check == null then
+            // Directory doesn't exist — create it
+            parent_parts = current_path.split("/")
+            parent_name = parent_parts.pop
+            parent_path = parent_parts.join("/")
+            if parent_path == "" then parent_path = "/"
+            
+            result = comp.create_folder(parent_path, parent_name)
+            if typeof(result) == "string" then
+                return false  // Error creating directory
+            end if
+        else if not check.is_folder then
+            return false  // Path exists but is a file, not directory
+        end if
+    end for
+    
+    return true
+end function
+
+// Override the old safe_file_write
+safe_file_read = function(path)
+    if path == null or path == "" then return null
+    
+    f = get_shell.host_computer.File(path)
+    if f == null then return null
+    
+    content = f.get_content
+    return content
 end function
 
 // Network retry wrapper for transient failures

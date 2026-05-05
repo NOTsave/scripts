@@ -1,97 +1,66 @@
-// master_controller.gs – final corrected version
+// ======================================
+// master_controller.gs
+// C2 interface: manages bots, sends
+// commands, collects responses
+// Dependencies: kyber_lib.gs, lib_common.gs
+// ======================================
 import_code("/lib/kyber_lib.gs")
 import_code("/lib/lib_common.gs")
-import_code("/scripts/utils/file_search.gs")
+import_code("/scripts/utils/find_lib.gs")
 import_code("/scripts/utils/sanitize_ip.gs")
+import_code("/scripts/utils/botnet_config.gs")
 
-BOTNET_DIR = "/root/.botnet/bots"
-COMMAND_QUEUE_DIR = "/root/.botnet/outgoing"
-INCOMING_DIR = "/root/.botnet/incoming"
 VERSION = "1.0"
 
-// Security: Whitelist allowed scripts and validate arguments
-allowed_scripts = ["/bin/slave.gs", "/bin/worm.gs", "/scripts/utils/wipe_logs.gs", "/scripts/utils/file_search.gs"]
+// Use centralized configuration
+BOTNET_DIR = get_config("paths.botnet_root") + "/bots"
+COMMAND_QUEUE_DIR = get_config("paths.botnet_root") + "/outgoing"
+INCOMING_DIR = get_config("paths.botnet_root") + "/incoming"
 
-// Validate command structure before broadcasting
-validate_command = function(cmd)
-    if cmd == null then return false
-    if typeof(cmd) != "string" then return false
-    if cmd.len == 0 then return false
-    if cmd.len > 1024 then return false  // Max command length
-    
-    parts = cmd.split(" ")
-    if parts.len == 0 then return false
-    
-    // Check command is in allowed list
-    allowed = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
-    if allowed.indexOf(parts[0]) == null then return false
-    
-    // Validate each part contains only printable characters
-    for part in parts
-        for c in part
-            code = c.code
-            if code < 32 or code > 126 then return false
-        end for
-    end for
-    
-    // Validate argument structure based on command
-    if parts[0] == "run" then
-        if parts.len < 2 then return false
-        // Script path must not contain multiple consecutive slashes
-        script_path = parts[1]
-        if script_path.indexOf("//") != null then return false
-        // Max 4 additional args
-        if parts.len > 6 then return false
-    else if parts[0] == "worm" then
-        if parts.len < 3 then return false
-        // Depth must be a number
-        depth = parts[2].to_int
-        if typeof(depth) != "number" then return false
-        if depth < 0 or depth > 10 then return false
-    else if parts[0] == "kill" then
-        if parts.len < 2 then return false
-    else if parts[0] == "read" then
-        if parts.len < 2 then return false
-        // File path must not contain //
-        if parts[1].indexOf("//") != null then return false
-    end if
-    
-    return true
-end function
+allowed_scripts = get_allowed_scripts()
 
 validate_script_args = function(script, args)
-    // Check if script is in whitelist
     if allowed_scripts.indexOf(script) == null then return false
-    
-    // Whitelist approach: only allow alphanumeric, dots, dashes, underscores, slashes
     allowed_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-_/"
-    
     for arg in args
-        if arg.len > 256 then return false  // Max arg length
+        if arg.len > 256 then return false
         for c in arg
             if allowed_chars.indexOf(c) == null then return false
         end for
     end for
-    
     return true
+end function
+
+try_create_lock = function(path, max_wait=30)
+    comp = get_shell.host_computer
+    start_time = time
+    lock_acquired = false
+    
+    for attempt in range(0, 9)  // Up to 10 attempts
+        result = comp.touch("/root/.botnet", "keygen.lock")
+        if result != 0 then
+            lock_acquired = true
+            break
+        end if
+        
+        elapsed = time - start_time
+        if elapsed > max_wait then  // 30 second timeout
+            log_master("Lock timeout after " + elapsed + "s", "WARN")
+            return false
+        end if
+        
+        wait(2 ^ attempt)  // Exponential: 1s, 2s, 4s, 8s, 16s
+    end for
+    
+    return lock_acquired
 end function
 
 get_backdoor_pass = function(ip)
     pass_file = "/root/.botnet/backdoor_pass_" + ip + ".enc"
     pass = retrieve_password_kyber(pass_file)
     if pass == null then
-        // Check for legacy XOR password
-        legacy_file = "/root/.botnet/backdoor_pass_" + ip
-        legacy_pass = read_file(legacy_file)
-        if legacy_pass then
-            pass = xor_obfuscate(legacy_pass, "botnet_key_2026")
-            // Migrate to Kyber
-            store_password_kyber(pass_file, pass)
-            get_shell.host_computer.File(legacy_file).delete
-        else
-            pass = generate_random_string(16)
-            store_password_kyber(pass_file, pass)
-        end if
+        pass = generate_random_string(16)
+        store_password_kyber(pass_file, pass)
     end if
     return pass
 end function
@@ -102,48 +71,35 @@ init_master = function()
     comp.create_folder("/root/.botnet", "bots")
     comp.create_folder("/root/.botnet", "outgoing")
     comp.create_folder("/root/.botnet", "incoming")
-    
-    if not read_file("/root/.botnet/master.priv") then
-        lock_path = "/root/.botnet/keygen.lock"
-        
-        // Atomic lock: touch returns 1 if file was created, 0 if already existed
-        lock_result = comp.touch("/root/.botnet", "keygen.lock")
-        
-        if lock_result == 0 then
-            // Another process already holds the lock
-            wait(3)
-            // Key should exist now
-            if read_file("/root/.botnet/master.priv") then return
-            // If still no key after waiting, other process may have crashed
-            log_master("Lock timeout waiting for keygen, aborting", "WARN")
-            return  // Don't proceed without the lock
+    if not safe_file_read(get_master_priv_file()) then
+        if not try_create_lock(get_config("paths.botnet_root") + "/keygen.lock", 30) then
+            log_master("Lock acquire failed", "ERROR")
+            exit()
         end if
-        
-        // We have the lock - double-check key doesn't exist
-        if read_file("/root/.botnet/master.priv") then
-            comp.File(lock_path).delete
-            return
+        if safe_file_read(get_master_priv_file()) then
+            comp.File(get_config("paths.botnet_root") + "/keygen.lock").delete
+        else
+            keys = Kyber.generate_keypair()
+            if keys and keys.private and keys.public then
+                safe_file_write(get_master_priv_file(), keys.private)
+                set_permissions(get_master_priv_file(), "600")
+                safe_file_write(get_master_pub_file(), keys.public)
+                set_permissions(get_master_pub_file(), "644")
+                log_master("Generated master keypair", "INFO")
+            end if
+            comp.File(get_config("paths.botnet_root") + "/keygen.lock").delete
         end if
-        
-        // Generate keys
-        keys = Kyber.generate_keypair()
-        if keys and keys.private and keys.public then
-            write_file("/root/.botnet/master.priv", keys.private)
-            set_permissions("/root/.botnet/master.priv", "600")
-            write_file("/root/.botnet/master.pub", keys.public)
-            set_permissions("/root/.botnet/master.pub", "644")
-            log_master("Generated master keypair", "INFO")
-        end if
-        
-        // Release lock
-        comp.File(lock_path).delete
+    end if
+    if comp.File("/root/.botnet/migration_complete") == null then
+        migrate_xor_passwords_to_kyber()
+        comp.touch("/root/.botnet", "migration_complete")
     end if
 end function
 
 register_bot = function(ip, pubkey_enc)
-    priv = read_file("/root/.botnet/master.priv")
+    priv = safe_file_read(get_master_priv_file())
     pubkey = Kyber.decrypt_message(priv, pubkey_enc)
-    write_file(BOTNET_DIR + "/" + ip + ".pub", pubkey)
+    safe_file_write(BOTNET_DIR + "/" + ip + ".pub", pubkey)
     set_permissions(BOTNET_DIR + "/" + ip + ".pub", "644")
     log_master("Registered bot " + sanitize_ip(ip), "SUCCESS")
 end function
@@ -156,23 +112,17 @@ send_command = function(ip, command)
     end if
     cipher = Kyber.encrypt_message(pubkey, command)
     if cipher == null then return false
-    
     tmp_file = "/tmp/cmd_" + str(time) + "_" + str(floor(rnd * 9999)) + ".enc"
     safe_file_write(tmp_file, cipher)
-    set_permissions(tmp_file, "600")
-    
-    // Retry connection up to 3 times
     connect_func = function()
         return get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
     end function
-    
     shell = retry_network(connect_func, 3, 2)
-    if typeof(shell) == "string" or shell == null then
-        log_master("Connect to " + sanitize_ip(ip) + " failed after retries", "ERROR")
+    if shell == null then
+        log_master("Failed to connect to " + sanitize_ip(ip), "ERROR")
         get_shell.host_computer.File(tmp_file).delete
         return false
     end if
-    
     get_shell.scp(tmp_file, "/root/.botnet/commands/", shell)
     get_shell.host_computer.File(tmp_file).delete
     return true
@@ -180,32 +130,28 @@ end function
 
 collect_responses = function()
     for ip in list_bots()
-        // Use retry_network wrapper for connection resilience
         connect_func = function()
             return get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
         end function
-        
-        shell = retry_network(connect_func, 3, 2)
-        if typeof(shell) == "string" or shell == null then
-            log_master("Failed to collect from " + sanitize_ip(ip) + " after retries", "WARN")
-            continue
-        end if
-        
+        shell = retry_network(connect_func, 2, 1)
+        if shell == null then continue
         resp_dir = shell.host_computer.File("/root/.botnet/responses")
         if resp_dir == null then continue
-        for f in resp_dir.get_files
+        files = resp_dir.get_files
+        if files == null then continue
+        for f in files
             if f == null then continue
             if f.name[-4:] == ".enc" then
                 cipher = f.get_content
-                if cipher == null then continue
-                priv = read_file("/root/.botnet/master.priv")
-                if priv == null then continue
-                resp = Kyber.decrypt_message(priv, cipher)
-                if resp == null then continue
-                log_master("Response from " + sanitize_ip(ip) + ": " + resp, "INFO")
-                write_file(INCOMING_DIR + "/" + ip + "_" + f.name, resp)
-                set_permissions(INCOMING_DIR + "/" + ip + "_" + f.name, "600")
-                f.delete
+                priv = safe_file_read("/root/.botnet/master.priv")
+                if priv and cipher then
+                    resp = Kyber.decrypt_message(priv, cipher)
+                    if resp then
+                        log_master("Resp from " + sanitize_ip(ip) + ": " + resp, "INFO")
+                        safe_file_write(INCOMING_DIR + "/" + ip + "_" + f.name, resp)
+                        f.delete
+                    end if
+                end if
             end if
         end for
     end for
@@ -217,107 +163,180 @@ list_bots = function()
     bot_dir = comp.File(BOTNET_DIR)
     if bot_dir == null then return bots
     for f in bot_dir.get_files
-        if f == null then continue
-        name = f.name
-        if name.len > 4 then
-            if name[-4:] == ".pub" then bots.push(name[:-4])
+        if f then
+            name = f.name
+            if name.len > 4 and name[-4:] == ".pub" then bots.push(name[:-4])
         end if
     end for
     return bots
 end function
 
-search_bot_files = function(ip, pattern, flags)
-    send_command(ip, "run /scripts/utils/file_search.gs " + pattern + " " + flags)
+// --- Command handlers ---
+command_handlers = {}
+
+command_handlers["help"] = function()
+    print("Commands:")
+    print("  list             - List registered bots")
+    print("  status           - Request status from all bots")
+    print("  run <ip> <script> [args] - Run script on bot")
+    print("  kill <ip> <script>      - Stop script on bot")
+    print("  worm <ip> <depth>       - Start worm from bot")
+    print("  clean <ip>       - Wipe logs on bot")
+    print("  search <ip> <pattern> <flags> - Search files on bot")
+    print("  logs             - Retrieve logs from all bots")
+    print("  broadcast <cmd>  - Send command to all bots")
+    print("  help             - This message")
+    print("  exit             - Quit")
+end function
+
+command_handlers["list"] = function()
+    bots = list_bots()
+    print("Registered bots: " + bots.len)
+    for ip in bots
+        print("  " + sanitize_ip(ip))
+    end for
+end function
+
+command_handlers["status"] = function()
+    for ip in list_bots()
+        send_command(ip, "status")
+    end for
     wait(2)
     collect_responses()
 end function
 
+command_handlers["run"] = function(args)
+    if args.len < 2 then
+        print("Usage: run <ip> <script> [args]")
+        return
+    end if
+    ip = args[0]
+    script = args[1]
+    args2 = args[2:]
+    if not validate_script_args(script, args2) then
+        print("ERROR: Script or arguments not allowed")
+    else
+        if send_command(ip, "run " + script + " " + args2.join(" ")) then
+            print("Command sent to " + sanitize_ip(ip))
+        else
+            print("Failed to reach " + sanitize_ip(ip))
+        end if
+    end if
+end function
+
+command_handlers["kill"] = function(args)
+    if args.len < 2 then
+        print("Usage: kill <ip> <script>")
+        return
+    end if
+    ip = args[0]
+    script = args[1]
+    if allowed_scripts.indexOf(script) == null then
+        print("ERROR: Script not allowed")
+    else
+        if send_command(ip, "kill " + script) then
+            print("Kill command sent to " + sanitize_ip(ip))
+        else
+            print("Failed to reach " + sanitize_ip(ip))
+        end if
+    end if
+end function
+
+command_handlers["worm"] = function(args)
+    if args.len < 2 then
+        print("Usage: worm <ip> <depth>")
+        return
+    end if
+    ip = args[0]
+    depth_str = args[1]
+    depth_val = depth_str.to_int
+    if typeof(depth_val) != "number" then
+        print(red("ERROR: Depth must be numeric"))
+        return
+    end if
+    
+    if depth_val < 0 or depth_val > 10 then
+        print(red("ERROR: Depth must be 0-10 (hard cap is 5)"))
+        return
+    end if
+    
+    if send_command(ip, "worm " + get_master_pub_file() + " " + depth_str) then
+        print("Worm command sent to " + sanitize_ip(ip))
+    else
+        print("Failed to reach " + sanitize_ip(ip))
+    end if
+end function
+
+command_handlers["clean"] = function(args)
+    if args.len < 1 then
+        print("Usage: clean <ip>")
+        return
+    end if
+    ip = args[0]
+    if send_command(ip, "clean") then
+        print("Clean command sent to " + sanitize_ip(ip))
+    else
+        print("Failed to reach " + sanitize_ip(ip))
+    end if
+end function
+
+command_handlers["search"] = function(args)
+    if args.len < 3 then
+        print("Usage: search <ip> <pattern> <flags>")
+        return
+    end if
+    ip = args[0]
+    pattern = args[1]
+    flags = args[2]
+    if send_command(ip, "run /scripts/utils/file_search.gs " + pattern + " " + flags) then
+        print("Search command sent to " + sanitize_ip(ip))
+        wait(2)
+        collect_responses()
+    else
+        print("Failed to reach " + sanitize_ip(ip))
+    end if
+end function
+
+command_handlers["logs"] = function()
+    for ip in list_bots()
+        send_command(ip, "read /root/.botnet/log.txt")
+    end for
+    wait(2)
+    collect_responses()
+end function
+
+command_handlers["broadcast"] = function(args)
+    if args.len < 1 then
+        print("Usage: broadcast <cmd>")
+        return
+    end if
+    cmd = args.join(" ")
+    if not validate_script_args("/bin/slave.gs", [cmd]) then
+        print("Invalid broadcast command")
+    else
+        for ip in list_bots()
+            send_command(ip, cmd)
+        end for
+        print("Broadcast sent to all bots")
+    end if
+end function
+
+// --- Main loop ---
 command_loop = function()
     print(blue("Master Controller v" + VERSION))
-    print(white("Commands: list, status, run <ip> <script> [args], kill <ip> <script>, worm <ip> <depth>, search <ip> <pattern> <flags>, clean <ip>, logs, broadcast <cmd>, exit"))
+    command_handlers["help"]()
     while true
-        input = user_input(white("master> "))
+        n = list_bots().len
+        input = sanitize_input(user_input(white("master [" + n + " bots]> ")))
         parts = input.split(" ")
         if parts.len == 0 then continue
-        
-        if parts[0] == "list" then
-            bots = list_bots()
-            print(white("Bots: " + bots.len + " registered"))
-            for ip in bots
-                print(white("  " + sanitize_ip(ip)))
-            end for
-        else if parts[0] == "status" then
-            for ip in list_bots()
-                send_command(ip, "status")
-            end for
-            wait(2)
-            collect_responses()
-        else if parts[0] == "run" then
-            if parts.len < 3 then
-                print(red("Usage: run <ip> <script> [args]"))
-            else
-                script = parts[2]
-                args = parts[3:]
-                if not validate_script_args(script, args) then
-                    print(red("ERROR: Script not allowed or invalid arguments"))
-                else
-                    cmd = "run " + script + " " + (args.join(" "))
-                    send_command(parts[1], cmd)
-                end if
-            end if
-        else if parts[0] == "kill" then
-            if parts.len < 3 then
-                print(red("Usage: kill <ip> <script>"))
-            else
-                script = parts[2]
-                if allowed_scripts.indexOf(script) == null then
-                    print(red("ERROR: Script not allowed"))
-                else
-                    send_command(parts[1], "kill " + script)
-                end if
-            end if
-        else if parts[0] == "worm" then
-            if parts.len < 3 then
-                print(red("Usage: worm <ip> <depth>"))
-            else
-                my_ip = get_shell.host_computer.public_ip
-                send_command(parts[1], "worm /root/.botnet/master.pub " + parts[2] + " " + my_ip)
-            end if
-        else if parts[0] == "clean" then
-            if parts.len < 2 then
-                print(red("Usage: clean <ip>"))
-            else
-                send_command(parts[1], "clean")
-            end if
-        else if parts[0] == "search" then
-            if parts.len < 4 then
-                print(red("Usage: search <ip> <pattern> <flags>"))
-            else
-                search_bot_files(parts[1], parts[2], parts[3])
-            end if
-        else if parts[0] == "logs" then
-            for ip in list_bots()
-                // Use 'read' command (slave now handles it)
-                send_command(ip, "read /root/.botnet/log.txt")
-            end for
-            collect_responses()
-        else if parts[0] == "broadcast" then
-            if parts.len < 2 then
-                print(red("Usage: broadcast <command>"))
-            else
-                cmd = parts[1:].join(" ")
-                if not validate_command(cmd) then
-                    print(red("Invalid broadcast command"))
-                else
-                    for ip in list_bots()
-                        send_command(ip, cmd)
-                    end for
-                end if
-            end if
-        else if parts[0] == "exit" then
-            break
+        cmd = parts[0]
+        args = parts[1:]
+        if cmd == "exit" then break
+        if command_handlers.hasIndex(cmd) then
+            command_handlers[cmd](args)
         else
-            print(red("Unknown command: " + parts[0]))
+            print(red("Unknown command: " + cmd + " (type 'help')"))
         end if
     end while
 end function
