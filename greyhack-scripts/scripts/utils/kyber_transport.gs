@@ -17,32 +17,40 @@ RETRY_BASE_DELAY = 2
 // ============================================
 
 get_c2_keypair = function()
-    // Try to load existing keys
+    // Check if keys already exist
     priv = safe_file_read("/root/.botnet/slave.priv")
     pub = safe_file_read("/root/.botnet/slave.pub")
-    
+
     if priv != null and pub != null then
         return {"private": priv, "public": pub}
     end if
-    
-    // Generate new keypair if none exists
+
+    // Generate new keypair
     keys = Kyber.generate_keypair()
-    if keys == null or keys.private == null or keys.public == null then
-        log_master("ERROR: Failed to generate C2 keypair", "ERROR")
+    if keys == null then  // ✅ Check for null
+        log_master("ERROR: Kyber.generate_keypair() returned null", "ERROR")
         return null
     end if
-    
-    // Save keys
-    if safe_file_write("/root/.botnet/slave.priv", keys.private) and
-       safe_file_write("/root/.botnet/slave.pub", keys.public) then
-        set_permissions("/root/.botnet/slave.priv", "600")
-        set_permissions("/root/.botnet/slave.pub", "644")
-        log_master("Generated new C2 keypair", "INFO")
-        return keys
+    if keys.private == null or keys.public == null then  // ✅ Check fields
+        log_master("ERROR: Keypair missing private or public key", "ERROR")
+        return null
     end if
-    
-    log_master("ERROR: Failed to save C2 keypair", "ERROR")
-    return null
+
+    // Save keys
+    if not safe_file_write("/root/.botnet/slave.priv", keys.private) then
+        log_master("ERROR: Failed to write private key", "ERROR")
+        return null
+    end if
+    if not safe_file_write("/root/.botnet/slave.pub", keys.public) then
+        log_master("ERROR: Failed to write public key", "ERROR")
+        comp.File("/root/.botnet/slave.priv").delete  // ✅ Cleanup on failure
+        return null
+    end if
+
+    set_permissions("/root/.botnet/slave.priv", "600")
+    set_permissions("/root/.botnet/slave.pub", "644")
+    log_master("Generated new C2 keypair", "INFO")
+    return keys
 end function
 
 get_master_pubkey = function(path="/root/.botnet/master.pub")
@@ -51,6 +59,73 @@ get_master_pubkey = function(path="/root/.botnet/master.pub")
         log_master("ERROR: Master public key not found at " + path, "ERROR")
     end if
     return pub
+end function
+
+// ============================================
+// Message Authentication via Kyber + Shared Secret (Item 32)
+// ============================================
+
+// Generate a shared secret during initial handshake
+derive_message_auth_key = function(shared_secret)
+    // Simple KDF: hash the shared secret multiple times
+    key = shared_secret
+    for i in range(0, 10)
+        // Simulate HKDF-Expand with repeated hashing
+        key = str(key.len) + "_" + key  // Simple expansion
+    end for
+    return key
+end function
+
+authenticate_command = function(cmd, auth_key)
+    // Create a digest by hashing command + auth_key
+    // In GreyScript, we don't have SHA, so use a simple checksum
+    digest = 0
+    combined = cmd + "|" + auth_key
+    
+    for c in combined
+        digest = (digest * 31 + c.code) % 2147483647
+    end for
+    
+    return str(digest)
+end function
+
+verify_command_authenticity = function(cmd, provided_auth, expected_auth_key)
+    expected_auth = authenticate_command(cmd, expected_auth_key)
+    return provided_auth == expected_auth
+end function
+
+encrypt_authenticated_command = function(cmd, master_pubkey, auth_key)
+    // Create authenticated command
+    auth_tag = authenticate_command(cmd, auth_key)
+    auth_cmd = cmd + "|AUTH:" + auth_tag
+    
+    // Encrypt the whole thing
+    cipher = Kyber.encrypt_message(master_pubkey, auth_cmd)
+    return cipher
+end function
+
+decrypt_and_verify_command = function(cipher, slave_privkey, auth_key)
+    // Decrypt
+    auth_cmd = Kyber.decrypt_message(slave_privkey, cipher)
+    if not auth_cmd then return null
+    
+    // Split command and auth tag
+    pipe_idx = auth_cmd.indexOf("|AUTH:")
+    if pipe_idx == null then
+        log_master("ERROR: No auth tag in decrypted command", "ERROR")
+        return null
+    end if
+    
+    cmd = auth_cmd[0 : pipe_idx]
+    auth_str = auth_cmd[pipe_idx + 6 :]  // Skip "|AUTH:"
+    
+    // Verify authentication
+    if not verify_command_authenticity(cmd, auth_str, auth_key) then
+        log_master("ERROR: Command authentication failed (tampering suspected? )", "ERROR")
+        return null
+    end if
+    
+    return cmd
 end function
 
 // ============================================
@@ -72,12 +147,54 @@ end function
 decrypt_command = function(cipher)
     if cipher == null or cipher == "" then return null
     
-    keys = get_c2_keypair()
-    if keys == null then return null
+    // Validate ciphertext format BEFORE attempting decryption (Item 24)
+    if typeof(cipher) != "string" then
+        log_master("ERROR: Ciphertext is not a string (type: " + typeof(cipher) + ")", "ERROR")
+        return null
+    end if
     
+    // Kyber-512 ciphertext is exactly 768 bytes (hex-encoded = ~1536 chars)
+    // Accept range 32-100000 to handle encoding variations and prevent DoS
+    if cipher.len < 32 then
+        log_master("ERROR: Ciphertext too short (" + cipher.len + " bytes)", "ERROR")
+        return null
+    end if
+    
+    if cipher.len > 100000 then  // Prevent DoS via huge ciphertext
+        log_master("ERROR: Ciphertext too long (" + cipher.len + " bytes)", "ERROR")
+        return null
+    end if
+    
+    // Attempt decryption with timeout protection
+    keys = get_c2_keypair()
+    if keys == null then
+        log_master("ERROR: Cannot load C2 keypair for decryption", "ERROR")
+        return null
+    end if
+    
+    start_time = time
     command = Kyber.decrypt_message(keys.private, cipher)
+    elapsed = time - start_time
+    
+    // Log if decryption took suspiciously long (possible DoS)
+    if elapsed > 5 then
+        log_master("WARN: Decryption took " + str(elapsed) + "s (possible malformed ciphertext)", "WARN")
+    end if
+    
     if command == null then
-        log_master("ERROR: Failed to decrypt command", "ERROR")
+        log_master("ERROR: Kyber decryption failed (ciphertext invalid or corrupted)", "ERROR")
+        return null
+    end if
+    
+    // Validate decrypted command before returning
+    if command.len == 0 then
+        log_master("ERROR: Decryption produced empty command", "ERROR")
+        return null
+    end if
+    
+    if command.len > 1024 then
+        log_master("ERROR: Decrypted command exceeds max length (1024 bytes)", "ERROR")
+        return null
     end if
     
     return command

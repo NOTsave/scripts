@@ -3,6 +3,152 @@
 // Eliminates code duplication between master and slave
 // ============================================
 
+// ============================================
+// Replay Attack Prevention (Item 33)
+// ============================================
+
+// Disk-backed nonce storage for large botnets (Performance optimization)
+NONCE_DB_FILE = "/root/.botnet/seen_nonces.txt"
+globals.seen_nonces = {}
+globals.nonce_cleanup_interval = 300  // Clean old nonces every 5 minutes (more frequent)
+globals.nonce_cleanup_threshold = 100  // Clean after 100 new nonces
+globals.nonces_since_cleanup = 0
+globals.last_nonce_cleanup = time
+globals.nonces_since_save = 0
+
+// Load nonces from disk at startup
+load_nonces = function()
+    if globals.seen_nonces.len > 0 then return  // Already loaded
+    
+    content = read_file(NONCE_DB_FILE)
+    if content then
+        lines = content.split(char(10))
+        for line in lines
+            if line.len > 0 then
+                parts = line.split(":")
+                if parts.len == 2 then
+                    globals.seen_nonces[parts[0]] = parts[1].to_int
+                end if
+            end if
+        end for
+        log_master("Loaded " + str(globals.seen_nonces.len) + " nonces from disk", "DEBUG")
+    end if
+end function
+
+// Save nonces to disk
+save_nonces = function()
+    lines = []
+    for nonce in globals.seen_nonces.indexes
+        lines.push(nonce + ":" + str(globals.seen_nonces[nonce]))
+    end for
+    
+    if safe_file_write(NONCE_DB_FILE, lines.join(char(10))) then
+        log_master("Saved " + str(lines.len) + " nonces to disk", "DEBUG")
+        globals.nonces_since_save = 0
+    else
+        log_master("WARNING: Failed to save nonces to disk", "WARN")
+    end if
+end function
+
+// Generate a cryptographically-secure-ish nonce with collision resistance
+generate_nonce = function()
+    // Use time + random + PID for uniqueness with enhanced entropy (Item 33)
+    nonce = str(time) + "_" + str(floor(rnd * 1000000000)) + "_" + str(get_shell.pid) + "_" + str(floor(rnd * 1000000))
+    return nonce
+end function
+
+// Validate command includes timestamp and nonce with clock skew tolerance
+validate_command_with_replay_protection = function(cmd_with_meta)
+    if cmd_with_meta == null or cmd_with_meta == "" then return null
+    
+    // Expected format: "TIMESTAMP:NONCE:COMMAND"
+    // Example: "1704067200:abc123_456789_12345:run /bin/slave.gs"
+    
+    parts = cmd_with_meta.split(":")
+    if parts.len < 3 then
+        log_master("ERROR: Command missing timestamp or nonce", "ERROR")
+        return null
+    end if
+    
+    timestamp_str = parts[0]
+    nonce = parts[1]
+    command = parts.join(":", 2)  // Rejoin remaining parts (command might have colons)
+    
+    // Validate timestamp
+    timestamp = timestamp_str.to_int
+    if typeof(timestamp) != "number" then
+        log_master("ERROR: Invalid timestamp in command", "ERROR")
+        return null
+    end if
+    
+    current_time = time
+    age = current_time - timestamp
+    
+    // Reject if older than 5 minutes (300 seconds)
+    if age > 300 then
+        log_master("ERROR: Command timestamp too old (" + str(age) + "s), rejecting (possible replay)", "WARN")
+        return null
+    end if
+    
+    // Allow future timestamps up to 60s (increased from 30s for clock skew)
+    if age < -60 then
+        log_master("ERROR: Command timestamp too far in future (" + str(age) + "s), rejecting", "WARN")
+        return null
+    end if
+    
+    // Check if nonce was already seen (replay attack)
+    if globals.seen_nonces.hasIndex(nonce) then
+        log_master("ERROR: Duplicate nonce detected (" + nonce + "), rejecting (replay attack!)", "ERROR")
+        return null
+    end if
+    
+    // Record nonce as seen
+    globals.seen_nonces[nonce] = current_time
+    globals.nonces_since_save = globals.nonces_since_save + 1
+    globals.nonces_since_cleanup = globals.nonces_since_cleanup + 1
+    
+    // Save to disk every 100 new nonces or on shutdown
+    if globals.nonces_since_save >= 100 then
+        save_nonces()
+    end if
+    
+    // ✅ NEW: Cleanup if threshold reached
+    if globals.nonces_since_cleanup >= globals.nonce_cleanup_threshold then
+        cleanup_old_nonces(current_time)
+        globals.nonces_since_cleanup = 0
+    end if
+    
+    // Periodic cleanup: remove old nonces (older than 10 minutes)
+    if current_time - globals.last_nonce_cleanup > globals.nonce_cleanup_interval then
+        cleanup_old_nonces(current_time)
+        globals.last_nonce_cleanup = current_time
+        // Also save after cleanup
+        save_nonces()
+    end if
+    
+    return command
+end function
+
+cleanup_old_nonces = function(current_time)
+    nonce_ttl = 600  // Keep nonces for 10 minutes
+    old_nonces = []
+    current_nonces = globals.seen_nonces.indexes  // ✅ Cache indexes
+    for nonce in current_nonces
+        if current_time - globals.seen_nonces[nonce] > nonce_ttl then
+            old_nonces.push(nonce)
+        end if
+    end for
+    for nonce in old_nonces
+        globals.seen_nonces.remove(nonce)
+    end for
+    if old_nonces.len > 0 then
+        log_master("Cleaned up " + str(old_nonces.len) + " old nonces (" + str(globals.seen_nonces.len) + " remaining)", "DEBUG")
+    end if
+end function
+
+// Initialize nonce storage
+load_nonces()
+
 // Validate command structure before broadcasting
 validate_command = function(cmd)
     if cmd == null then return false

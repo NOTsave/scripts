@@ -28,7 +28,7 @@ toFolder = function(fileObj, folderPath)
 end function
 
 accessLevel = function(result)
-    if result == null then return "unknown"
+    if result == null then return "unknown"  // ✅ Never null
     
     comp = null
     if typeof(result) == "shell" then
@@ -38,22 +38,37 @@ accessLevel = function(result)
     else if typeof(result) == "file" then
         comp = result.host_computer
     else
-        return "unknown"
+        return "unknown"  // ✅ Never null
     end if
     
-    if comp == null then return "unknown"
+    if comp == null then return "unknown"  // ✅ Never null
     
     // Test root by attempting to create a file in /root
     // This is non-destructive and tests actual write permissions
     test_name = ".root_test_" + str(floor(rnd * 9999))
-    testFile = comp.File("/root/" + test_name)
+    test_path = "/root/" + test_name
+    
+    // Try to create test file
+    result = comp.touch("/root", test_name)
+    if result == null then return "guest"
+    
+    testFile = comp.File(test_path)
+    if testFile == null then return "guest"
+    
+    testContent = "access_test_" + str(time)
+    testFile.set_content(testContent)
+    
+    // Verify write succeeded
+    verify = testFile.get_content
+    
+    // ALWAYS cleanup, even if test failed (Item 18)
     if testFile != null then
-        testContent = "access_test"
-        testFile.set_content(testContent)
-        if testFile.get_content == testContent then
-            testFile.delete  // Clean up
-            return "root"
-        end if
+        testFile.delete
+    end if
+    
+    // Only return true if content matched
+    if verify == testContent then
+        return "root"
     end if
     
     // Check for user level — look for readable /home subfolders

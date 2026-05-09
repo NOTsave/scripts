@@ -9,6 +9,8 @@ import_code("/lib/lib_common.gs")
 import_code("/scripts/utils/find_lib.gs")
 import_code("/scripts/utils/sanitize_ip.gs")
 import_code("/scripts/utils/botnet_config.gs")
+import_code("/scripts/utils/kyber_transport.gs")
+import_code("/scripts/utils/command_validation.gs")
 
 VERSION = "1.0"
 
@@ -38,7 +40,7 @@ try_create_lock = function(path, max_wait=30)
     
     for attempt in range(0, 9)  // Up to 10 attempts
         result = comp.touch("/root/.botnet", "keygen.lock")
-        if result != 0 then
+        if result != null then
             lock_acquired = true
             break
         end if
@@ -101,30 +103,56 @@ register_bot = function(ip, pubkey_enc)
     pubkey = Kyber.decrypt_message(priv, pubkey_enc)
     safe_file_write(BOTNET_DIR + "/" + ip + ".pub", pubkey)
     set_permissions(BOTNET_DIR + "/" + ip + ".pub", "644")
-    log_master("Registered bot " + sanitize_ip(ip), "SUCCESS")
+    
+    // NEW: Derive and store auth key for this bot (Item 32)
+    bot_auth_key = generate_random_string(32)
+    safe_file_write(BOTNET_DIR + "/" + ip + ".auth", bot_auth_key)
+    set_permissions(BOTNET_DIR + "/" + ip + ".auth", "600")
+    
+    log_master("Registered bot " + sanitize_ip(ip) + " with auth key", "SUCCESS")
 end function
 
 send_command = function(ip, command)
     pubkey = safe_file_read(BOTNET_DIR + "/" + ip + ".pub")
+    auth_key = safe_file_read(BOTNET_DIR + "/" + ip + ".auth")
+    
     if not pubkey then
         log_master("Bot " + sanitize_ip(ip) + " not registered", "ERROR")
         return false
     end if
-    cipher = Kyber.encrypt_message(pubkey, command)
+    
+    if not auth_key then
+        log_master("Bot " + sanitize_ip(ip) + " missing auth key, using legacy encryption", "WARN")
+        // Fallback to unauthenticated encryption
+        cipher = Kyber.encrypt_message(pubkey, command)
+    else
+        // NEW: Wrap with timestamp + nonce (replay protection)
+        nonce = globals.generate_nonce()
+        cmd_with_meta = str(time) + ":" + nonce + ":" + command
+        
+        // Encrypt with authentication (Item 32)
+        cipher = encrypt_authenticated_command(cmd_with_meta, pubkey, auth_key)
+    end if
+    
     if cipher == null then return false
+    
     tmp_file = "/tmp/cmd_" + str(time) + "_" + str(floor(rnd * 9999)) + ".enc"
     safe_file_write(tmp_file, cipher)
+    
     connect_func = function()
         return get_shell.connect_service(ip, 22, "backdoor", get_backdoor_pass(ip))
     end function
+    
     shell = retry_network(connect_func, 3, 2)
     if shell == null then
         log_master("Failed to connect to " + sanitize_ip(ip), "ERROR")
         get_shell.host_computer.File(tmp_file).delete
         return false
     end if
+    
     get_shell.scp(tmp_file, "/root/.botnet/commands/", shell)
     get_shell.host_computer.File(tmp_file).delete
+    shell.close
     return true
 end function
 
