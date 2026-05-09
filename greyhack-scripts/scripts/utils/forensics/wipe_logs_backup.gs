@@ -78,8 +78,7 @@ generate_decoy_content = function()
 end function
 
 // --- Corrupt system.log (5hell-style silentclean) ---
-silentclean = function(nuke_mode)
-    if nuke_mode == null then nuke_mode = false
+silentclean = function(nuke_mode=false)
     comp = get_shell.host_computer
     
     // Primary target: system.log
@@ -126,7 +125,7 @@ silentclean = function(nuke_mode)
                 end if
             end for
         end if
-    end if
+    end for
     for tp in trash_paths
         trash = comp.File(tp)
         if trash != null then
@@ -139,7 +138,7 @@ silentclean = function(nuke_mode)
 end function
 
 // --- Legacy wrapper for compatibility ---
-wipe_logs = function(comp)
+wipe_logs = function(comp=null)
     if comp == null then comp = get_shell.host_computer
     silentclean(false)
 end function

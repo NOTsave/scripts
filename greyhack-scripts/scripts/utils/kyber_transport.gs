@@ -5,6 +5,59 @@ import_code("/lib/kyber_lib.gs")
 import_code("/lib/lib_common.gs")
 
 // ============================================
+// Net + Kyber Transport Layer
+// ============================================
+
+// --- Enhanced Ciphertext Validation (from net.5pk.src) ---
+validate_ciphertext = function(ciphertext)
+    if ciphertext == null or ciphertext.len == 0 then
+        return false
+    end if
+    
+    // Check for whitespace and newlines
+    if ciphertext.find(" ") != -1 or ciphertext.find(char(10)) != -1 then
+        return false
+    end if
+    
+    // Check for control characters
+    for c in ciphertext
+        if c.code < 32 then
+            return false
+        end if
+    end for
+    
+    // Kyber-512 size validation (accounting for encoding variations)
+    if ciphertext.len < 768 or ciphertext.len > 2048 then
+        return false
+    end if
+    
+    return true
+end function
+
+// --- Enhanced Kyber Encryption (from net.5pk.src) ---
+enhanced_encrypt_message = function(pub_key, message)
+    // Use your Kyber.encrypt from kyber_lib.gs
+    cipher = kyber_encrypt(message, pub_key)
+    
+    // Additional validation
+    if not validate_ciphertext(cipher) then
+        log_master("ERROR: Generated invalid ciphertext", "ERROR")
+        return null
+    end if
+    
+    return cipher
+end function
+
+enhanced_decrypt_message = function(priv_key, ciphertext)
+    if not validate_ciphertext(ciphertext) then
+        log_master("ERROR: Invalid ciphertext format", "ERROR")
+        return null
+    end if
+    
+    return kyber_decrypt(ciphertext, priv_key)
+end function
+
+// ============================================
 // C2 Transport Configuration
 // ============================================
 

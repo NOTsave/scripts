@@ -202,6 +202,78 @@ end function
 // --- Command handlers ---
 command_handlers = {}
 
+// ============================================
+// 5hell + Botnet C2 Commands
+// ============================================
+
+// --- Botnet C2 Commands ---
+botnet = function(arg1, arg2, arg3, arg4)
+    if arg1 == null then
+        echo "Usage: botnet [status|cmd|broadcast|wipe]"
+        return
+    end if
+
+    if arg1 == "status" then
+        echo "=== Botnet Status ==="
+        bots = list_bots()
+        for ip in bots
+            echo "- " + sanitize_ip(ip)
+        end for
+        echo "Total bots: " + str(bots.len)
+        return
+    end if
+
+    if arg1 == "cmd" and arg2 != null then
+        // Encrypt and send command to specific bot
+        command = arg3
+        if command == null then
+            echo "Usage: botnet cmd <ip> <command>"
+            return
+        end if
+        
+        if send_command(arg2, command) then
+            echo "SUCCESS: Command sent to " + sanitize_ip(arg2)
+        else
+            echo "ERROR: Failed to send command to " + sanitize_ip(arg2)
+        end if
+        return
+    end if
+
+    if arg1 == "broadcast" and arg2 != null then
+        // Send command to all bots
+        cmd = args[1:]
+        if cmd.len == 0 then
+            echo "Usage: botnet broadcast <command>"
+            return
+        end if
+        
+        broadcast_cmd = cmd.join(" ")
+        success_count = 0
+        for ip in list_bots()
+            if send_command(ip, broadcast_cmd) then
+                success_count = success_count + 1
+            end if
+        end for
+        echo "Broadcast sent to " + str(success_count) + "/" + str(list_bots().len) + " bots"
+        return
+    end if
+
+    if arg1 == "wipe" then
+        wiped_count = 0
+        for ip in list_bots()
+            if send_command(ip, "wipe_botnet") then
+                wiped_count = wiped_count + 1
+                echo "Wipe command sent to: " + sanitize_ip(ip)
+            end if
+        end for
+        echo "Wipe commands sent to " + str(wiped_count) + " bots"
+        return
+    end if
+
+    echo "Unknown botnet command: " + arg1
+end function
+
+// --- Enhanced command handlers with 5hell integration ---
 command_handlers["help"] = function()
     print("Commands:")
     print("  list             - List registered bots")
@@ -213,6 +285,7 @@ command_handlers["help"] = function()
     print("  search <ip> <pattern> <flags> - Search files on bot")
     print("  logs             - Retrieve logs from all bots")
     print("  broadcast <cmd>  - Send command to all bots")
+    print("  botnet <cmd>     - Botnet management (status/cmd/broadcast/wipe)")
     print("  help             - This message")
     print("  exit             - Quit")
 end function
@@ -363,6 +436,8 @@ command_loop = function()
         if cmd == "exit" then break
         if command_handlers.hasIndex(cmd) then
             command_handlers[cmd](args)
+        else if cmd == "botnet" then
+            botnet(args[0], args[1], args[2], args[3])
         else
             print(red("Unknown command: " + cmd + " (type 'help')"))
         end if

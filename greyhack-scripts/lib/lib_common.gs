@@ -5,6 +5,124 @@
 // Dependencies: kyber_lib.gs
 // ======================================
 
+// ============================================
+// Kore + Botnet Utilities
+// ============================================
+
+// --- Safe Path (from your slave.gs) ---
+safe_path = function(path)
+    if path == null or path == "" then return null
+    
+    allowed_prefixes = ["/root/.botnet/", "/root/src/", "/scripts/", "/bin/", "/tmp/"]
+    normalized = path
+    
+    // Normalize path: remove . and resolve ..
+    while true
+        prev = normalized
+        normalized = normalized.replace("/./", "/")
+        normalized = normalized.replace("/[^/]+/../", "/")
+        normalized = normalized.replace("//", "/")
+        if prev == normalized then
+            break
+        end if
+    end while
+    
+    // Check if path starts with allowed prefix
+    for prefix in allowed_prefixes
+        if normalized.find(prefix) == 0 then
+            return normalized
+        end if
+    end for
+    
+    return null
+end function
+
+// --- Kyber Key Management ---
+generate_kyber_keypair = function()
+    keypair = Kyber.generate_keypair()
+    if keypair == null then
+        return null
+    end if
+    
+    // Save to /root/.botnet/keys/
+    comp = get_shell.host_computer
+    if not comp.File("/root/.botnet/keys") then
+        comp.create_folder("/root/.botnet", "keys")
+    end if
+    
+    pub_key_file = comp.File("/root/.botnet/keys/pub.key")
+    priv_key_file = comp.File("/root/.botnet/keys/priv.key")
+    
+    if pub_key_file == null then
+        pub_key_file = comp.touch("/root/.botnet/keys", "pub.key")
+    end if
+    if priv_key_file == null then
+        priv_key_file = comp.touch("/root/.botnet/keys", "priv.key")
+    end if
+    
+    if pub_key_file and priv_key_file then
+        pub_key_file.set_content(keypair.public)
+        priv_key_file.set_content(keypair.private)
+        set_permissions("/root/.botnet/keys/priv.key", "600")
+        set_permissions("/root/.botnet/keys/pub.key", "644")
+        return keypair
+    end if
+    
+    return null
+end function
+
+// --- Enhanced nonce generation for replay protection ---
+generate_nonce = function()
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    result = ""
+    for i in range(0, 15)  // 16-character nonce
+        result = result + chars[floor(rnd * chars.len)]
+    end for
+    return result
+end function
+
+// Initialize global nonce generator if not exists
+if not globals.hasIndex("generate_nonce") then
+    globals.generate_nonce = generate_nonce
+end if
+
+// --- Authenticated command encryption (Item 32) ---
+encrypt_authenticated_command = function(command, pubkey, auth_key)
+    if command == null or pubkey == null or auth_key == null then
+        return null
+    end if
+    
+    // First encrypt with Kyber
+    kyber_cipher = Kyber.encrypt_message(pubkey, command)
+    if kyber_cipher == null then
+        return null
+    end if
+    
+    // Then XOR with auth_key for additional authentication
+    final_cipher = xor_obfuscate(kyber_cipher, auth_key)
+    
+    return final_cipher
+end function
+
+// --- Authenticated command decryption ---
+decrypt_authenticated_command = function(cipher, privkey, auth_key)
+    if cipher == null or privkey == null or auth_key == null then
+        return null
+    end if
+    
+    // First XOR with auth_key
+    kyber_cipher = xor_obfuscate(cipher, auth_key)
+    
+    // Then decrypt with Kyber
+    command = Kyber.decrypt_message(privkey, kyber_cipher)
+    
+    return command
+end function
+
+// ============================================
+// End Kore + Botnet Utilities
+// ============================================
+
 // Guard block: prevent double-import issues and globals re-initialization
 if globals.hasIndex("lib_common_loaded") then
     return
