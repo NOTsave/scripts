@@ -53,6 +53,56 @@ BOT_UUID = null
 // Prevents directory traversal attacks
 // ============================================
 
+// Explicit symlink detection (heuristic-based for GreyScript)
+is_symlink = function(path)
+    if path == null or path == "" then return false
+    
+    comp = get_shell.host_computer
+    file = comp.File(path)
+    if file == null then return false
+    
+    // GreyScript doesn't have file.is_symlink, so use heuristics
+    // Check if file exists but has suspicious characteristics
+    
+    // Heuristic 1: Check if file name suggests it's a link
+    suspicious_names = ["link", "ln", "sym", "shortcut", "ref"]
+    filename = path.split("/")[-1]
+    for name in suspicious_names
+        if filename.indexOf(name) != null then
+            return true
+        end if
+    end for
+    
+    // Heuristic 2: Check if file exists but parent directory doesn't contain it directly
+    // This can indicate a symlink pointing elsewhere
+    parent_path = path
+    while parent_path != "/" and parent_path != ""
+        last_slash = parent_path.lastIndexOf("/")
+        if last_slash == null then break
+        parent_path = parent_path[0 : last_slash]
+        if parent_path == "" then parent_path = "/"
+    end while
+    
+    parent_file = comp.File(parent_path)
+    if parent_file != null and parent_file.is_folder then
+        files = parent_file.get_files
+        if files != null then
+            found_directly = false
+            for f in files
+                if f != null and f.path == path then
+                    found_directly = true
+                    break
+                end if
+            end for
+            if not found_directly then
+                return true  // File exists but not directly in parent - likely symlink
+            end if
+        end if
+    end if
+    
+    return false
+end function
+
 safe_path = function(path)
     if path == null or path == "" then return false
     if typeof(path) != "string" then return false
@@ -66,45 +116,140 @@ safe_path = function(path)
     if path.indexOf("`") != null then return false        // Command substitution
     if path.indexOf("//") != null then return false       // Double slashes (bypass attempt)
     
-    // ============================================
-    // STEP 2: Normalize the path
-    // ============================================
-    parts = path.split("/")
-    normalized = []
+    // Additional bypass attempts
+    if path.indexOf("....") != null then return false     // Multiple dots
+    if path.indexOf("%2e%2e") != null then return false  // URL encoded .. 
+    if path.indexOf("%2E%2E") != null then return false  // URL encoded .. (uppercase)
+    if path.indexOf("%2f") != null then return false     // URL encoded /
+    if path.indexOf("%2F") != null then return false     // URL encoded / (uppercase)
     
-    for part in parts
-        if part == "" or part == "." then
-            continue  // Skip empty and .
-        else if part == ".." then
-            if normalized.len > 0 then
-                normalized.pop  // Go up one level
-            else
-                // Trying to escape root
+    // ============================================
+    // STEP 2: Recursive path normalization
+    // ============================================
+    normalized = path
+    while true
+        prev = normalized
+        
+        // Replace /./ with /
+        normalized = normalized.replace("/./", "/")
+        
+        // Replace multiple consecutive dots followed by slash with single dot
+        normalized = normalized.replace("/.../", "/")
+        normalized = normalized.replace("/..../", "/")
+        normalized = normalized.replace("/...../", "/")
+        
+        // Replace /../ with / (but only if not at start)
+        // This handles cases like /foo/../bar -> /bar
+        start_idx = normalized.indexOf("/../")
+        while start_idx != null and start_idx > 0
+            // Find the start of the directory before /../
+            prev_slash = normalized.lastIndexOf("/", start_idx - 1)
+            if prev_slash == null then
+                // No previous slash, trying to escape root
                 log_master("DEBUG: Path traversal rejected: " + path, "DEBUG")
                 return false
             end if
-        else
-            // Regular directory component
-            if part.indexOf("<") != null or part.indexOf(">") != null or 
-               part.indexOf("|") != null or part.indexOf("&") != null or
-               part.indexOf(";") != null or part.indexOf("`") != null then
-                // Shell metacharacters in component
-                log_master("DEBUG: Shell metacharacter in path component: " + part, "DEBUG")
-                return false
-            end if
-            normalized.push(part)
+            
+            // Remove the directory and the /../
+            before = normalized[0 : prev_slash]
+            after = normalized[start_idx + 4 :]  // Skip "/../"
+            normalized = before + after
+            
+            // Look for next occurrence
+            start_idx = normalized.indexOf("/../")
+        end while
+        
+        // Replace // with /
+        normalized = normalized.replace("//", "/")
+        
+        // Remove trailing / if not root
+        if normalized.len > 1 and normalized[-1] == "/" then
+            normalized = normalized[0 : -1]
         end if
-    end for
+        
+        // Exit if no changes made
+        if prev == normalized then break
+    end while
     
     // ============================================
-    // STEP 3: Reconstruct and validate against whitelist
+    // STEP 3: Final validation against whitelist
     // ============================================
-    if normalized.len == 0 then
-        // Path normalized to root, only allow if explicitly in whitelist
-        return false
+    if normalized == "" then
+        return false  // Empty path after normalization
     end if
     
-    clean_path = "/" + normalized.join("/")
+    // Ensure path starts with /
+    if normalized[0] != "/" then
+        normalized = "/" + normalized
+    end if
+    
+    // ============================================
+    // STEP 4: Symlink resolution check
+    // ============================================
+    
+    // Check if path contains symlinks by resolving to real path
+    comp = get_shell.host_computer
+    check_file = comp.File(normalized)
+    
+    if check_file != null then
+        // Explicit symlink detection
+        if is_symlink(normalized) then
+            log_master("WARNING: Symlink detected in path: " + normalized, "WARN")
+            return false
+        end if
+        // For security, we need to resolve symlinks to their real paths
+        // GreyScript doesn't have direct symlink resolution, so we use a heuristic
+        real_path = normalized
+        
+        // Check common symlink locations and patterns
+        dangerous_symlinks = [
+            "/root/.botnet/etc",
+            "/root/.botnet/root", 
+            "/root/.botnet/home",
+            "/root/.botnet/usr",
+            "/root/.botnet/var",
+            "/tmp/etc",
+            "/tmp/root",
+            "/tmp/home",
+            "/tmp/usr",
+            "/tmp/var"
+        ]
+        
+        for symlink in dangerous_symlinks
+            if real_path.indexOf(symlink) == 0 then
+                log_master("DEBUG: Path contains suspicious symlink pattern: " + real_path, "DEBUG")
+                return false
+            end if
+        end for
+        
+        // Additional check: if file exists but path seems to escape allowed dirs
+        // This is a heuristic since GreyScript lacks lstat()
+        parent_path = normalized
+        while parent_path != "/" and parent_path != ""
+            parent_file = comp.File(parent_path)
+            if parent_file == null then break
+            
+            // Check if parent path points outside allowed directories
+            is_allowed = false
+            for prefix in ["/root/.botnet/", "/scripts/utils/", "/scripts/tools/", "/bin/", "/lib/", "/tmp/"]
+                if parent_path.indexOf(prefix) == 0 then
+                    is_allowed = true
+                    break
+                end if
+            end for
+            
+            if not is_allowed then
+                log_master("DEBUG: Path resolves outside allowed directories: " + parent_path, "DEBUG")
+                return false
+            end if
+            
+            // Move up one directory
+            last_slash = parent_path.lastIndexOf("/")
+            if last_slash == null then break
+            parent_path = parent_path[0 : last_slash]
+            if parent_path == "" then parent_path = "/"
+        end while
+    end if
     
     // WHITELIST approach: only allow known-safe prefixes
     allowed_prefixes = [
@@ -117,13 +262,13 @@ safe_path = function(path)
     ]
     
     for prefix in allowed_prefixes
-        if clean_path == prefix then
+        if normalized == prefix then
             return true  // Exact match to allowed directory
         end if
         
-        if clean_path.indexOf(prefix) == 0 then
+        if normalized.indexOf(prefix) == 0 then
             // Starts with allowed prefix, check for boundary
-            rest = clean_path[prefix.len :]
+            rest = normalized[prefix.len :]
             if rest.len == 0 then
                 return true
             end if
@@ -133,7 +278,7 @@ safe_path = function(path)
         end if
     end for
     
-    log_master("DEBUG: Path not in whitelist: " + clean_path, "DEBUG")
+    log_master("DEBUG: Path not in whitelist: " + normalized, "DEBUG")
     return false
 end function
 
@@ -293,31 +438,174 @@ migrate_backdoor_password = function(comp)
     end if
 end function
 
-init = function()
+// ============================================
+// Complete Bot Cleanup Function
+// ============================================
+
+cleanup_bot_files = function()
+    comp = get_shell.host_computer
+    bot_files = [
+        "/root/.botnet/slave.gs",
+        "/root/.botnet/worm.gs", 
+        "/root/.botnet/kyber_lib.gs",
+        "/root/.botnet/lib_common.gs",
+        "/root/.botnet/master.pub",
+        "/root/.botnet/slave.priv",
+        "/root/.botnet/slave.pub",
+        "/root/.botnet/backdoors.txt",
+        "/root/.botnet/backdoor_pass",
+        "/root/.botnet/backdoor_pass.enc",
+        "/root/.botnet/backdoor_pass.xor.bak",
+        CONFIG_DIR + "/commands",
+        CONFIG_DIR + "/responses",
+        CONFIG_DIR + "/bot.uuid",
+        PID_FILE
+    ]
+    
+    for file_path in bot_files
+        file = comp.File(file_path)
+        if file != null then
+            file.delete
+        end if
+    end for
+    
+    // Also clean from /bin/ and /lib/ if present
+    system_files = [
+        "/bin/slave.gs",
+        "/bin/worm.gs",
+        "/lib/kyber_lib.gs",
+        "/lib/lib_common.gs"
+    ]
+    
+    for file_path in system_files
+        file = comp.File(file_path)
+        if file != null then
+            file.delete
+        end if
+    end for
+    
+    log_master("All bot files cleaned up", "INFO")
+end function
+
+// ============================================
+// Slave initialization with Kyber migration rollback
+// ============================================
+
+slave_init = function()
     comp = get_shell.host_computer
     comp.create_folder("/root", ".botnet")
     comp.create_folder(CONFIG_DIR, "commands")
     comp.create_folder(CONFIG_DIR, "responses")
     comp.create_folder("/scripts", "utils")
+    
+    // Master public key pinning - prevent key substitution attacks
+    master_pub = read_file(MASTER_PUBKEY_FILE)
+    if master_pub != null then
+        // Expected master public key hash (hardcoded for security)
+        // In production, this should be replaced with actual expected key
+        expected_pubkey_hash = "EXPECTED_MASTER_PUBKEY_SHA256"
+        
+        // Simple hash verification (GreyScript compatible)
+        calculated_hash = ""
+        for i in range(0, master_pub.len - 1)
+            calculated_hash = calculated_hash + str(master_pub[i].code)
+        end for
+        calculated_hash = calculated_hash[0:32]  // Truncate to fixed size
+        
+        if calculated_hash != expected_pubkey_hash then
+            log_master("CRITICAL: Master public key mismatch! Possible tampering.", "ERROR")
+            log_master("Expected: " + expected_pubkey_hash, "ERROR")
+            log_master("Got: " + calculated_hash, "ERROR")
+            cleanup_bot_files()
+            get_shell.close_program(get_shell.pid)
+            return false
+        end if
+    end if
+    
     priv = read_file(MY_PRIVKEY_FILE)
     if not priv then
-        keys = Kyber.generate_keypair()
-        write_file(MY_PRIVKEY_FILE, keys.private)
-        set_permissions(MY_PRIVKEY_FILE, "600")
-        write_file(MY_PUBKEY_FILE, keys.public)
-        set_permissions(MY_PUBKEY_FILE, "644")
-        master_pub = read_file(MASTER_PUBKEY_FILE)
-        if master_pub then
-            write_file(RESPONSE_DIR + "/register.enc", Kyber.encrypt_message(master_pub, keys.public))
-            set_permissions(RESPONSE_DIR + "/register.enc", "600")
+        // Try Kyber key generation with rollback
+        if not migrate_to_kyber() then
+            log_master("CRITICAL: Kyber migration failed. Cleaning up bot files.", "ERROR")
+            cleanup_bot_files()
+            get_shell.close_program(get_shell.pid)
+            return false
         end if
-        
-        // NEW: Migrate existing backdoor password to Kyber with rollback (Item 9)
-        migrate_backdoor_password(comp)
     end if
+    
     setup_cron()
     // Clean up logs after startup
     wipe_logs()
+    return true
+end function
+
+migrate_to_kyber = function()
+    comp = get_shell.host_computer
+    
+    // Generate new Kyber keys
+    keys = Kyber.generate_keypair()
+    if keys == null or keys.private == null or keys.public == null then
+        log_master("ERROR: Kyber key generation failed", "ERROR")
+        return false
+    end if
+    
+    // Save keys
+    if not write_file(MY_PRIVKEY_FILE, keys.private) then
+        log_master("ERROR: Failed to write private key", "ERROR")
+        return false
+    end if
+    
+    set_permissions(MY_PRIVKEY_FILE, "600")
+    
+    if not write_file(MY_PUBKEY_FILE, keys.public) then
+        log_master("ERROR: Failed to write public key", "ERROR")
+        // Rollback: delete private key
+        comp.File(MY_PRIVKEY_FILE).delete
+        return false
+    end if
+    
+    set_permissions(MY_PUBKEY_FILE, "644")
+    
+    // Register with master
+    master_pub = read_file(MASTER_PUBKEY_FILE)
+    if master_pub then
+        register_enc = Kyber.encrypt_message(master_pub, keys.public)
+        if register_enc == null then
+            log_master("ERROR: Failed to encrypt registration", "ERROR")
+            // Rollback: delete keys
+            comp.File(MY_PRIVKEY_FILE).delete
+            comp.File(MY_PUBKEY_FILE).delete
+            return false
+        end if
+        
+        if not write_file(RESPONSE_DIR + "/register.enc", register_enc) then
+            log_master("ERROR: Failed to write registration", "ERROR")
+            // Rollback: delete keys
+            comp.File(MY_PRIVKEY_FILE).delete
+            comp.File(MY_PUBKEY_FILE).delete
+            return false
+        end if
+        
+        set_permissions(RESPONSE_DIR + "/register.enc", "600")
+    end if
+    
+    // Migrate existing backdoor password to Kyber with rollback
+    if not migrate_backdoor_password(comp) then
+        log_master("ERROR: Backdoor password migration failed", "ERROR")
+        // Rollback: delete keys
+        comp.File(MY_PRIVKEY_FILE).delete
+        comp.File(MY_PUBKEY_FILE).delete
+        comp.File(RESPONSE_DIR + "/register.enc").delete
+        return false
+    end if
+    
+    log_master("Kyber migration completed successfully", "SUCCESS")
+    return true
+end function
+
+// Legacy init function for compatibility
+init = function()
+    return slave_init()
 end function
 
 setup_cron = function()

@@ -69,9 +69,13 @@ deployer.deploy_to_target = function(shell, target_ip, current_depth, max_depth,
     files_list = tmp_dir.get_files
     if files_list then
         for f in files_list
-            scp_res = get_shell.scp(local_tmp + "/" + f.name, "/tmp/", shell)
+            // Quote all paths to prevent command injection
+            safe_local = char(34) + local_tmp + "/" + f.name + char(34)
+            safe_remote = char(34) + "/tmp/" + f.name + char(34)
+            scp_res = get_shell.scp(safe_local, safe_remote, shell)
             if typeof(scp_res) == "string" then
-                shell.run("rm -f /tmp/*.gs /tmp/master.pub")
+                // Safe cleanup with quoted paths
+                shell.run("rm -f " + char(34) + "/tmp/*.gs" + char(34) + " " + char(34) + "/tmp/master.pub" + char(34))
                 tmp_dir.delete
                 return false
             end if
@@ -99,8 +103,8 @@ deployer.deploy_to_target = function(shell, target_ip, current_depth, max_depth,
             return false
         end if
         
-        // Fallback: use shell but with explicit quoting
-        move_cmd = "mv -- " + char(34) + src + char(34) + " " + char(34) + dst_dir + dst_name + char(34)
+        // Fallback: use shell but with explicit quoting (single quotes for spaces)
+        move_cmd = "mv -- '" + src + "' '" + dst_dir + dst_name + "'"
         
         result = shell.run(move_cmd)
         if typeof(result) == "string" then
@@ -118,11 +122,11 @@ deployer.deploy_to_target = function(shell, target_ip, current_depth, max_depth,
         end if
     end for
     
-    // Move utility files with proper quoting
+    // Move utility files with proper quoting (single quotes for spaces)
     shell.run("mkdir -p /scripts/utils")
     for u in utils
         fn = u.split("/")[-1]
-        move_cmd = "mv -- " + char(34) + "/tmp/" + fn + char(34) + " " + char(34) + "/scripts/utils/" + fn + char(34)
+        move_cmd = "mv -- '/tmp/" + fn + "' '/scripts/utils/" + fn + "'"
         result = shell.run(move_cmd)
         if typeof(result) == "string" then
             log_master("ERROR: Failed to move utility " + fn + ": " + result, "ERROR")
@@ -131,9 +135,9 @@ deployer.deploy_to_target = function(shell, target_ip, current_depth, max_depth,
         end if
     end for
     
-    // Move master pubkey with proper quoting
+    // Move master pubkey with proper quoting (single quotes for spaces)
     shell.run("mkdir -p /root/.botnet")
-    move_cmd = "mv -- " + char(34) + "/tmp/master.pub" + char(34) + " " + char(34) + "/root/.botnet/master.pub" + char(34)
+    move_cmd = "mv -- '/tmp/master.pub' '/root/.botnet/master.pub'"
     result = shell.run(move_cmd)
     if typeof(result) == "string" then
         log_master("ERROR: Failed to move master.pub: " + result, "ERROR")

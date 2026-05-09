@@ -288,13 +288,21 @@ migrate_xor_passwords_to_kyber = function()
             xor_data = f.get_content
             if xor_data == null or xor_data == "" then continue
             
-            // Decrypt XOR
-            password = xor_obfuscate(xor_data, "botnet_key_2026")
-            if password == null or password == "" then continue
+            // Decrypt the old XOR-encrypted password
+            old_pass = null
+            if xor_data.len > 4 then
+                // Generate dynamic XOR key based on hostname and timestamp
+                comp = get_shell.host_computer
+                hostname_key = "botnet_" + str(comp.public_ip.split(".")[-1]) + "_" + str(time % 10000)
+                old_pass = xor_obfuscate(xor_data, hostname_key)
+            else
+                // Assume plaintext if very short
+                old_pass = xor_data
+            end if
             
             // Encrypt with Kyber
             kyber_path = "/root/.botnet/backdoor_pass_" + ip + ".enc"
-            if store_password_kyber(kyber_path, password) then
+            if store_password_kyber(kyber_path, old_pass) then
                 // Delete original XOR file
                 f.delete
                 migrated_count = migrated_count + 1

@@ -129,6 +129,23 @@ decrypt_and_verify_command = function(cipher, slave_privkey, auth_key)
 end function
 
 // ============================================
+// Base64 Validation Helper
+// ============================================
+
+is_base64 = function(s)
+    if s == null or s == "" then return false
+    if typeof(s) != "string" then return false
+    
+    valid_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    for c in s
+        if valid_chars.find(c) == -1 then
+            return false
+        end if
+    end for
+    return true
+end function
+
+// ============================================
 // Message Encryption/Decryption
 // ============================================
 
@@ -153,15 +170,33 @@ decrypt_command = function(cipher)
         return null
     end if
     
-    // Kyber-512 ciphertext is exactly 768 bytes (hex-encoded = ~1536 chars)
-    // Accept range 32-100000 to handle encoding variations and prevent DoS
-    if cipher.len < 32 then
-        log_master("ERROR: Ciphertext too short (" + cipher.len + " bytes)", "ERROR")
+    // Base64 validation - reject non-base64 characters
+    if not is_base64(cipher) then
+        log_master("ERROR: Ciphertext contains non-base64 characters", "ERROR")
         return null
     end if
     
-    if cipher.len > 100000 then  // Prevent DoS via huge ciphertext
-        log_master("ERROR: Ciphertext too long (" + cipher.len + " bytes)", "ERROR")
+    // Enhanced security checks: reject whitespace and control characters
+    if cipher.find(" ") != null or cipher.find(char(10)) != null or cipher.find(char(13)) != null or cipher.find(char(9)) != null then
+        log_master("ERROR: Ciphertext contains whitespace or control characters", "ERROR")
+        return null
+    end if
+    
+    // Check for null bytes and other dangerous characters
+    if cipher.find(char(0)) != null then
+        log_master("ERROR: Ciphertext contains null bytes", "ERROR")
+        return null
+    end if
+    
+    // Kyber-512 ciphertext is exactly 768 bytes (hex-encoded = ~1536 chars)
+    // Stricter range to prevent DoS: 768-2048 chars (accounting for encoding variations)
+    if cipher.len < 768 then
+        log_master("ERROR: Ciphertext too short (" + cipher.len + " bytes, expected 768+)", "ERROR")
+        return null
+    end if
+    
+    if cipher.len > 2048 then  // Stricter limit to prevent DoS
+        log_master("ERROR: Ciphertext too long (" + cipher.len + " bytes, max 2048)", "ERROR")
         return null
     end if
     
